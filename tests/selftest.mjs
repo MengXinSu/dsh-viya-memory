@@ -39,7 +39,7 @@ function makeCtx() {
 
 function tempLibrary() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-memory-test-'))
-  return { dir, config: { library: dir, softLimit: 400, hardLimit: 800, searchBudget: 2000, sensitiveScan: true } }
+  return { dir, config: { library: dir, softLimit: 400, hardLimit: 4000, searchBudget: 2000, sensitiveScan: true } }
 }
 
 const EXPECTED_TOOLS = [
@@ -111,14 +111,14 @@ describe('模块与工具注册', () => {
     assert.equal(typeof cfg.sensitiveScan, 'boolean', 'sensitiveScan 解包后必须是 boolean，否则敏感信息扫描会被绕过')
     assert.equal(typeof cfg.userFile, 'string', 'userFile 解包后必须是 string，否则 user.md 路径会变成 [object Object]')
     assert.equal(cfg.softLimit, 400)
-    assert.equal(cfg.hardLimit, 800)
+    assert.equal(cfg.hardLimit, 4000)
     // 比较语义必须成立（盒子做 > 比较永远是 false）
     assert.ok(cfg.hardLimit > cfg.softLimit, '硬限必须真的大于软限')
     assert.ok(cfg.sensitiveScan === true)
     // 普通值照样原样通过
-    const plain = mod.__internals.unwrapConfig({ library: 'C:\\x', hardLimit: 800, sensitiveScan: false })
+    const plain = mod.__internals.unwrapConfig({ library: 'C:\\x', hardLimit: 4000, sensitiveScan: false })
     assert.equal(plain.library, 'C:\\x')
-    assert.equal(plain.hardLimit, 800)
+    assert.equal(plain.hardLimit, 4000)
     assert.equal(plain.sensitiveScan, false)
   })
 
@@ -501,14 +501,14 @@ describe('工具真实调用（临时库）', () => {
 
   it('memory_save 追加后超硬限 → 报错并提示重写', async () => {
     await assert.rejects(
-      () => call('memory_save', { title: '并发写冲突', content: '长'.repeat(790) + '补充新内容完全不同' }),
+      () => call('memory_save', { title: '并发写冲突', content: '长'.repeat(3990) + '补充新内容完全不同' }),
       /硬限/,
     )
   })
 
-  it('memory_save 超硬限的新卡 → 报错并提示「卡 + 指针」', async () => {
+  it('memory_save 超硬限的新卡 → 报错并提示拆分', async () => {
     await assert.rejects(
-      () => call('memory_save', { title: '一张超长的卡', content: '字'.repeat(801) }),
+      () => call('memory_save', { title: '一张超长的卡', content: '字'.repeat(4001) }),
       /卡 \+ 指针|硬限/,
     )
   })
@@ -924,7 +924,7 @@ describe('端到端冒烟测试', () => {
     // 也不会碰到谁的私有 vault（上一版这里指向开发者的固定路径，已改掉）。
     const REAL_LIB = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-smoke-'))
     const { ctx, tools } = makeCtx()
-    mod.apply(ctx, { library: REAL_LIB, hardLimit: 800, searchBudget: 2000, sensitiveScan: true })
+    mod.apply(ctx, { library: REAL_LIB, hardLimit: 4000, searchBudget: 2000, sensitiveScan: true })
     const call = (name, args) => tools.get(name).execute(args, {})
 
     let cardPath = null
