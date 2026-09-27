@@ -1213,3 +1213,257 @@ describe('图片端到端', () => {
     fs.rmSync(srcDir, { recursive: true, force: true })
   })
 })
+
+// ─────────────────── 渲染层分支覆盖 ───────────────────
+//
+// 2026-09-28 变异扫描发现：把 render 里**各个分支的条件改成恒假**，85 条测试照样全绿——
+// 也就是说 render 的多数分支从来没被任何断言碰过（历史上那个「括号嵌套 + 字数重复」的
+// bug 正是藏在 render 里）。这里逐分支钉死：每条断言对应 render 里的一个分支。
+describe('渲染层分支覆盖（变异扫描补）', () => {
+  let tools
+
+  before(() => {
+    const made = makeCtx()
+    tools = made.tools
+    mod.apply(made.ctx, { library: 'C:\\nope' })
+  })
+
+  const render = (name, value) => tools.get(name).output.render({}, value).map(b => b.text).join('\n')
+
+  it('memory_search：空结果说「没找到」，不吐命中标题行', () => {
+    const out = render('memory_search', { total: 0, returned: 0, degraded: 0, results: [] })
+    assert.ok(out.includes('没找到匹配的记忆卡'), `空结果必须有这句，实际：${out}`)
+    assert.ok(!out.includes('命中'), '空结果不该出现「命中 N 张」')
+  })
+
+  it('memory_search：命中时逐条给出标题 / kind / 路径 / 摘要 / 附图标记', () => {
+    const out = render('memory_search', {
+      total: 7,
+      returned: 1,
+      degraded: 0,
+      results: [{
+        title: '卡片标题', path: 'C:\\lib\\x.md', kind: '03-Knowledge',
+        updated: '2026-09-28', summary: '摘要文字', hasImage: true, score: 3,
+      }],
+    })
+    assert.ok(out.includes('命中 7 张，返回 1 张'), `命中行要报总数与返回数，实际：${out}`)
+    for (const piece of ['卡片标题', '03-Knowledge', 'C:\\lib\\x.md', '摘要文字', '📎']) {
+      assert.ok(out.includes(piece), `缺 ${piece}，实际：${out}`)
+    }
+  })
+
+  it('memory_search：有降级条目时必须如实说降级了几条', () => {
+    const out = render('memory_search', {
+      total: 3,
+      returned: 1,
+      degraded: 2,
+      results: [{
+        title: 't', path: 'p', kind: 'k', updated: 'd', summary: 's', hasImage: false, score: 1,
+      }],
+    })
+    assert.ok(out.includes('2 条因预算不足降级'), `降级要报告，实际：${out}`)
+  })
+
+  it('memory_read：found=false 说「记忆不存在」，并带上要找的名字', () => {
+    const out = render('memory_read', {
+      found: false, title: '没有的卡', path: '', status: '', updated: '', links: [], attachments: [], body: '',
+    })
+    assert.ok(out.includes('记忆不存在'), `实际：${out}`)
+    assert.ok(out.includes('没有的卡'), '要带上要找的名字，否则不知道哪张没找到')
+  })
+
+  it('memory_read：元信息 / links / attachments / 正文 / 收尾标签，五段缺一不可', () => {
+    const out = render('memory_read', {
+      found: true, title: 'T', path: 'P', status: 'approved', updated: '2026-09-28',
+      links: ['A --related--> B'], attachments: ['E:\\x\\y.png'], body: '正文内容',
+    })
+    assert.ok(out.startsWith('<card path="P">'), `要以 card 标签开头，实际：${out}`)
+    assert.ok(out.includes('title: T'), '缺 title 行')
+    assert.ok(out.includes('status: approved'), '缺 status 行')
+    assert.ok(out.includes('updated: 2026-09-28'), '缺 updated 行')
+    assert.ok(out.includes('links: A --related--> B'), '有链接必须列出来')
+    assert.ok(out.includes('attachments: E:\\x\\y.png'), '有附件必须列出来')
+    assert.ok(out.includes('正文内容'), '正文必须原样在')
+    assert.ok(out.trimEnd().endsWith('</card>'), '缺收尾标签')
+  })
+
+  it('memory_update：无字段变更时说「（无）」，有变更时逐项列出', () => {
+    const none = render('memory_update', { title: 'T', path: 'P', words: 12, changed: [] })
+    assert.ok(none.includes('改了：（无）'), `实际：${none}`)
+    const some = render('memory_update', { title: 'T', path: 'P', words: 12, changed: ['tags', 'importance'] })
+    assert.ok(some.includes('改了：tags、importance'), `实际：${some}`)
+  })
+
+  it('memory_link：created / updated / skipped 三种回执互不相同', () => {
+    const base = { source: 'A', target: 'B', type: 'related' }
+    assert.ok(render('memory_link', { ...base, status: 'created' }).includes('已连边'), 'created 回执不对')
+    assert.ok(render('memory_link', { ...base, status: 'updated' }).includes('已更新边'), 'updated 回执不对')
+    assert.ok(render('memory_link', { ...base, status: 'skipped' }).includes('跳过'), 'skipped 回执不对')
+  })
+
+  it('memory_forget：四态回执（preview / deleted / not-found / trashed）', () => {
+    const base = { title: 'T', path: 'P', links: 2, referrers: 3 }
+    const preview = render('memory_forget', { ...base, mode: 'preview' })
+    assert.ok(preview.includes('什么都没动'), `preview 必须强调没动，实际：${preview}`)
+    assert.ok(preview.includes('confirm'), 'preview 要告诉怎么确认')
+    assert.ok(preview.includes('2 条关系') && preview.includes('3 张卡'), 'preview 要报清引用面')
+    assert.ok(render('memory_forget', { ...base, mode: 'deleted' }).includes('已永久删除'), 'deleted 回执不对')
+    assert.ok(render('memory_forget', { ...base, mode: 'not-found' }).includes('没动任何东西'), 'not-found 回执不对')
+    const trashed = render('memory_forget', { ...base, mode: 'trashed' })
+    assert.ok(trashed.includes('已忘掉') && trashed.includes('回收站'), `trashed 回执不对：${trashed}`)
+  })
+
+  it('memory_stats：分布 / 超长卡 / 死链 / 库外链接 四段都在，且 0 条库外链接时不刷屏', () => {
+    const out = render('memory_stats', {
+      total: 5, trashed: 1,
+      oversized: ['超长卡（5000 字）'],
+      deadLinks: ['A → [[没有的卡]]'],
+      externalLinks: 3,
+      kinds: [{ dir: '03-Knowledge', count: 5 }],
+    })
+    assert.ok(out.includes('各目录分布'), `缺分布段，实际：${out}`)
+    assert.ok(out.includes('03-Knowledge: 5 张'), `分布行不对：${out}`)
+    assert.ok(out.includes('超长卡（5000 字）'), '缺超长卡条目')
+    assert.ok(out.includes('A → [[没有的卡]]'), '缺死链条目')
+    assert.ok(out.includes('库外链接：3 条'), '缺库外链接计数')
+
+    const zero = render('memory_stats', {
+      total: 1, trashed: 0, oversized: [], deadLinks: [], externalLinks: 0, kinds: [],
+    })
+    assert.ok(!zero.includes('库外链接'), `0 条时不该出现这一行，实际：${zero}`)
+  })
+})
+
+// ─────────────────── 变异扫描补测（2026-09-28） ───────────────────
+//
+// 每一条都对应一个「人为造出缺陷、85 条测试却全绿」的变异点。
+// 判定过：这些是**真盲区**（另外两类漏点已排除——等价变异如冗余防御、纯文案）。
+describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
+  let lib, tools
+
+  before(() => {
+    lib = tempLibrary()
+    const made = makeCtx()
+    tools = made.tools
+    mod.apply(made.ctx, lib.config)
+  })
+
+  after(() => {
+    fs.rmSync(lib.dir, { recursive: true, force: true })
+  })
+
+  const call = (name, args) => tools.get(name).execute(args, {})
+
+  // 变异点：删掉 differing() 里的 `return Number(old.weight) !== next.weight || ...`
+  // → 函数变 undefined（falsy）→「同类型边、只改 weight」会被误判成 already-linked，改动静默丢失。
+  it('memory_link 同类型改 weight：返回 updated，且新权重真的落盘', async () => {
+    await call('memory_save', { title: '连边甲', content: '甲卡正文，内容独立。', kind: 'mistakes' })
+    await call('memory_save', { title: '连边乙', content: '乙卡正文，内容独立。', kind: 'mistakes' })
+
+    const first = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related', weight: 0.5 })
+    assert.equal(first.status, 'created')
+
+    const again = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related', weight: 0.9 })
+    assert.equal(again.status, 'updated', '同类型但权重变了，必须是 updated，不是 already-linked')
+
+    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '连边甲.md'), 'utf8')
+    assert.ok(raw.includes('weight: 0.9'), `新权重必须落盘，实际：${raw}`)
+  })
+
+  it('memory_link 连同样的边 → already-linked（不重复写）', async () => {
+    const r = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related', weight: 0.9 })
+    assert.equal(r.status, 'already-linked')
+  })
+
+  // 变异点：`hasOwn(args,'weight') && Number.isFinite(...)` 的 && 改成 ||。
+  // 判定结果：**等价变异**——非数字的 weight 在 defineTool 的参数 schema 那一层就被拒了
+  // （实测 `weight: 'abc'` 直接 ToolArgsError），Number.isFinite 只是第二道防线，够不到。
+  // 真正有语义的是 hasOwn 那一半，所以这里测「没说就不该动已有边」。
+  it('memory_link 不传 weight → 已有边的权重不被改写', async () => {
+    const r = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related' })
+    assert.equal(r.status, 'already-linked', '没说就是没说，不该动已有边')
+    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '连边甲.md'), 'utf8')
+    assert.ok(raw.includes('weight: 0.9'), `权重必须还是 0.9，实际：${raw}`)
+  })
+
+  // 变异点：`other.links.some(l => l.target === card.title)` 的 === 改成 !==
+  // → 引用计数算错（会去数「引用了任何别的东西」的卡）。
+  //
+  // 这条**必须用独立的最小库**：第一版写在共享库里，而库里恰好有两张互相引用的卡
+  // （连边甲/乙），变异后的错误实现数出来正好也是 2 —— 期望值与错误结果撞在一起，
+  // 测试全绿、缺陷溜过。（变异验证里最阴的一种假绿：不是没覆盖，是期望值凑巧相等。）
+  // 现在独立成库，再放一张「谁都不引用」的路人卡当干扰项。
+  it('memory_forget 预览里「有几张卡引用了它」必须数准', async () => {
+    const solo = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, solo.config)
+    const soloCall = (name, args) => made.tools.get(name).execute(args, {})
+
+    try {
+      await soloCall('memory_save', { title: '被引用卡', content: '这张卡会被别人引用。', kind: 'mistakes' })
+      await soloCall('memory_save', { title: '引用者甲', content: '见 [[被引用卡]]，甲自己的内容。', kind: 'mistakes' })
+      await soloCall('memory_save', { title: '引用者乙', content: '也见 [[被引用卡]]，乙自己的内容。', kind: 'mistakes' })
+      await soloCall('memory_save', { title: '路人卡', content: '这张卡谁也没引用，也没有引用谁。', kind: 'mistakes' })
+
+      const p = await soloCall('memory_forget', { title: '被引用卡' })
+      assert.equal(p.mode, 'preview')
+      assert.equal(p.referrers, 2, `只有甲和乙引用它，实际 ${p.referrers}`)
+      assert.equal(p.links, 0, '它自己没引用别人')
+    } finally {
+      fs.rmSync(solo.dir, { recursive: true, force: true })
+    }
+  })
+
+  // 变异点：`if (wanted.length === 0)` 恒假 → 空 title 不再报错，转而去搜一个空名字。
+  it('memory_forget 空 title → 明确报错，不做任何事', async () => {
+    await assert.rejects(() => call('memory_forget', { title: '   ' }), /title 不能为空/)
+  })
+
+  // 变异点：`if (fs.existsSync(dest))` 恒假 → 回收站里已有同名文件时**直接覆盖**
+  // （后删的那份吃掉先删的，是静默数据丢失）。
+  it('memory_forget 回收站里撞名 → 另存一份，绝不覆盖已有文件', async () => {
+    await call('memory_save', { title: '撞名卡', content: '正式内容，独立。', kind: 'mistakes' })
+
+    // 预置一个同名文件在回收站里，模拟「历史上删过的同名卡」
+    const trash = path.join(lib.dir, '_trashed')
+    fs.mkdirSync(trash, { recursive: true })
+    const squatter = path.join(trash, '撞名卡.md')
+    const squatterBody = '---\ntitle: 撞名卡\nstatus: deleted\n---\n\n更早删掉的那一份，不能被覆盖。\n'
+    fs.writeFileSync(squatter, squatterBody, 'utf8')
+
+    const r = await call('memory_forget', { title: '撞名卡', confirm: true })
+    assert.equal(r.mode, 'trashed')
+    assert.ok(fs.existsSync(r.path), '新删的这份要落盘')
+    assert.notEqual(r.path, squatter, '撞名时必须另存一个名字，而不是覆盖')
+    assert.equal(fs.readFileSync(squatter, 'utf8'), squatterBody, '回收站里原有的那份必须一字不动')
+  })
+
+  // 变异点：memory_update 里的 `if (cfg.sensitiveScan !== false)` 恒假
+  // → update 这条路径的敏感信息闸被整个旁路。
+  // 原来只有 memory_save 测过敏感扫描——同一个闸的另一扇门（update）从没验证过。
+  it('memory_update 也要拦敏感信息（同一个闸的另一扇门）', async () => {
+    await call('memory_save', { title: '待脱敏的卡', content: '正常内容，稍后会用 update 往里塞密钥。', kind: 'mistakes' })
+
+    await assert.rejects(
+      () => call('memory_update', { title: '待脱敏的卡', content: 'key = sk-abcdefghijklmnopqrstuvwx' }),
+      /敏感信息/,
+    )
+    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '待脱敏的卡.md'), 'utf8')
+    assert.ok(!raw.includes('sk-abcdefghijklmnopqrstuvwx'), '拒绝之后盘上不能留下这串密钥')
+    assert.ok(raw.includes('正常内容'), '被拒的那次不能把原正文弄丢')
+  })
+
+  // 变异点：`if (words > hardLimit)` 恒假 → 体检不再报告超长卡。
+  // 长度闸在写入侧挡住了超长卡，所以这里直接落盘一张，专门喂给体检。
+  it('memory_stats 要报告超长卡（> 硬限）', async () => {
+    await call('memory_save', { title: '正常卡', content: '正常长度的内容。' }) // 默认落 03-Knowledge，顺带把目录建出来
+    const file = path.join(lib.dir, '03-Knowledge', '手写的超长卡.md')
+    fs.writeFileSync(file, `---\nformatVersion: 1\ntitle: 手写的超长卡\nkind: 03-Knowledge\n---\n\n${'字'.repeat(4200)}\n`, 'utf8')
+
+    const r = await call('memory_stats', {})
+    assert.ok(r.oversized.some(o => o.includes('手写的超长卡')), `超长卡必须被报出来，实际：${JSON.stringify(r.oversized)}`)
+    assert.ok(r.oversized.some(o => o.includes('4200')), '要带上实际字数')
+
+    fs.rmSync(file, { force: true })
+  })
+})
