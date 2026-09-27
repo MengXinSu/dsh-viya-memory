@@ -1,0 +1,11 @@
+# viya-memory 的 bundle 层：把这个插件插进 loader 树。
+#
+# library 是**必填**：改成你自己的 Obsidian vault 目录，必须是绝对路径。
+# 这里是卡片真正落盘的地方 —— 写错不会有任何提示，只会把卡写到别的目录去。
+#   Linux / macOS: '/home/you/Obsidian/MyVault'
+#   Windows:       'D:\Obsidian\MyVault'   （YAML 单引号里反斜杠不用转义）
+- insert:
+    - id: viya-memory
+      name: viya-memory
+      config:
+        library: '/absolute/path/to/your/vault'

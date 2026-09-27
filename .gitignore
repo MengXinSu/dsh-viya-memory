@@ -1,0 +1,14 @@
+# 依赖（自测时临时挂，不入库）
+node_modules/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# 日志与临时产物
+*.log
+npm-debug.log*
+pnpm-debug.log*
