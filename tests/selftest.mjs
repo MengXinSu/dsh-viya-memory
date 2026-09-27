@@ -773,6 +773,46 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(I.slugify('   '), 'card', '全空回落 fallback')
   })
 
+  // memory_read 保留「能读库外文件」的既有能力（它要详情与附件绝对路径）；
+  // 但 memory_forget 会把文件搬进 _trashed，绝不能被同一条路径带出库。
+  it('memory_read 可读库外；memory_forget 不许动库外', async () => {
+    const outside = path.join(path.dirname(lib.dir), 'outside-read-probe.md')
+    fs.writeFileSync(outside, '---\ntitle: 库外详情卡\n---\n库外内容', 'utf8')
+    const r = await call('memory_read', { title: outside })
+    assert.equal(r.found, true, '库外文件应当能读（这是 memory_read 的既有能力）')
+    assert.ok(r.body.includes('库外内容'))
+    const f = await call('memory_forget', { title: outside })
+    assert.equal(f.mode, 'not-found', 'memory_forget 不该碰库外文件（它用 mode 表达结果）')
+    assert.equal(fs.existsSync(outside), true, '库外文件必须原样还在')
+    // 也试一下用「标题」去命中库外那张卡：同样必须拒绝
+    const byTitle = await call('memory_forget', { title: '库外详情卡' })
+    assert.equal(byTitle.mode, 'not-found', '用标题也不许把库外卡删掉')
+    assert.equal(fs.existsSync(outside), true, '库外文件必须原样还在')
+    fs.rmSync(outside, { force: true })
+  })
+
+  // 2026-09-27：换 type 时旧边的 weight/description 属于旧关系，不该被默认继承
+  // （related 0.8 → contradicts 之后仍是 0.8，语义错配）。
+  it('memory_link 换类型时重置权重与说明（除非显式给出）', async () => {
+    await call('memory_save', { title: '换型A', content: 'A 内容独立。', kind: 'projects' })
+    await call('memory_save', { title: '换型B', content: 'B 内容独立。', kind: 'projects' })
+    await call('memory_link', { source: '换型A', target: '换型B', type: 'related', weight: 0.9, description: '旧说明' })
+    const sv = await call('memory_link', { source: '换型A', target: '换型B', type: 'explains' })
+    assert.equal(sv.status, 'updated')
+    const after = I.parseCard(fs.readFileSync((await call('memory_read', { title: '换型A' })).path, 'utf8'), '/x/t.md')
+    const edge = after.links.find(l => l.target === '换型B')
+    assert.equal(edge.type, 'explains')
+    assert.equal(edge.weight, 0.7, '换类型后应落回默认权重，而不是继承旧关系的 0.9')
+    assert.equal(edge.description, '', '换类型后旧说明不该跟过来')
+    assert.ok(after.body.includes('> explains: [[换型B]]'), '正文 callout 也要换成新类型')
+    // 显式给了就按给的来
+    await call('memory_link', { source: '换型A', target: '换型B', type: 'causes', weight: 0.3, description: '新说明' })
+    const after2 = I.parseCard(fs.readFileSync((await call('memory_read', { title: '换型A' })).path, 'utf8'), '/x/t.md')
+    const e2 = after2.links.find(l => l.target === '换型B')
+    assert.equal(e2.weight, 0.3)
+    assert.equal(e2.description, '新说明')
+  })
+
   it('memory_link 一边找不到 → 整条不写，不留单向边', async () => {
     const before = fs.readFileSync(
       (await call('memory_read', { title: '被连的卡' })).path, 'utf8',
