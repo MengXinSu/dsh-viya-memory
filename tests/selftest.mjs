@@ -245,7 +245,10 @@ describe('slug 与 kind 匹配', () => {
     assert.equal(I.slugify('a/b\\c:d*e?f'), 'a-b-c-d-e-f')
     assert.equal(I.slugify('  '), 'card')
     assert.equal(I.slugify('中文 标题（括号）'), '中文-标题（括号）')
-    assert.ok(I.slugify('x'.repeat(200)).length <= 60)
+    // 上限按**字节**算（150），不再是旧的 60 字符：中文一个字 3 字节，
+    // 按字符截会让长中文标题顶到文件名上限；150 字节也让长标题不容易撞车。
+    assert.ok(I.slugify('x'.repeat(200)).length <= 150)
+    assert.ok(Buffer.byteLength(I.slugify('中'.repeat(200)), 'utf8') <= 150)
   })
 
   const kinds = new Set(I.KINDS.map(([d]) => d))
@@ -682,6 +685,29 @@ describe('工具真实调用（临时库）', () => {
       '带目录的相对路径必须以库根为基准',
     )
     assert.equal(I.resolveImagePath('a.png', dir), 'a.png', '裸文件名保持旧行为')
+  })
+
+  // 2026-09-27 实测：标题前 60 字相同的两张卡撞同一文件名，第二张被判「重合」静默拒写。
+  it('长标题截断后不撞车：不同标题各写各的，不误判重合', async () => {
+    const base = 'A'.repeat(80)
+    const r1 = await call('memory_save', { title: `${base}第一部分`, content: '第一张卡，讲主题甲。', kind: 'projects' })
+    const r2 = await call('memory_save', { title: `${base}第二部分`, content: '第二张卡，讲主题乙。', kind: 'projects' })
+    assert.equal(r2.action.startsWith('跳过'), false, `第二张被误判重合拒写了：${r2.action}`)
+    assert.notEqual(r1.path, r2.path, '两个不同标题不该落到同一个文件')
+    const c1 = I.parseCard(fs.readFileSync(r1.path, 'utf8'), r1.path)
+    const c2 = I.parseCard(fs.readFileSync(r2.path, 'utf8'), r2.path)
+    assert.equal(c1.title, `${base}第一部分`)
+    assert.equal(c2.title, `${base}第二部分`)
+  })
+
+  // 中文按字节算：150 字节上限，不能再出现旧上限下 60 个汉字就截断的情况
+  it('slug 按字节安全截断，不越过文件名上限', () => {
+    const long = '中'.repeat(200)
+    const s = I.slugify(long)
+    assert.ok(Buffer.byteLength(s, 'utf8') <= 150, `slug 字节数 ${Buffer.byteLength(s, 'utf8')} 超过 150`)
+    assert.ok(s.startsWith('中'), '不该把整个 slug 丢掉')
+    assert.equal(I.slugify('Hello World'), 'Hello-World')
+    assert.equal(I.slugify('   '), 'card', '全空回落 fallback')
   })
 
   it('memory_link 一边找不到 → 整条不写，不留单向边', async () => {
