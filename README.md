@@ -79,7 +79,7 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 | `memory_read` | **`title`** 或 **`path`** | 正文全文 + `status`/`updated`/`links` + 附件绝对路径（不自动读图，图片 token 贵） |
 | `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` · `occurred_at` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
 | `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条 `[[]]`；两边都找得到才写 |
-| `memory_forget` | **`title`** · `permanent` | 默认软删（`status: deleted` + 挪进 `_trashed/`），`permanent: true` 才真删 |
+| `memory_forget` | **`title`** · `confirm` · `permanent` | **两步删**：不传 `confirm` 只返回预览（删哪张、谁引用了它、一个字节都不动）；`confirm: true` 才软删进 `_trashed/`；`permanent: true` 真删（同样要 confirm） |
 | `memory_stats` | 无 | 只读体检：总卡数 / 分布 / 超长卡 / **死链** / 回收站 |
 
 **撞名的处理是三岔口**，不是二选一：同名卡不存在就新建；已存在且新内容与旧内容高度重合（bigram 重叠 > 0.6）
@@ -112,10 +112,10 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 node --test tests/selftest.mjs
 ```
 
-**75 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
+**77 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
 与文件名撞车、kind 三道闸、三层长度闸、bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组
 与权重、七个工具的完整行为（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链 /
-路径夹取）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
+路径夹取 / **删除的 confirm 硬闸**）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
 
 其中相当一部分是**被测出来的 bug 反向补的回归用例**——标量标签、值里带换行、超长标题撞文件名、
 相对路径越出库根、换关系类型继承旧权重，都在这一栏里。
@@ -135,6 +135,11 @@ node --test tests/selftest.mjs
 - **关系边**：目标 + 类型相同即视为「已有这条边」，再次调用跳过；**换 `type` 会把 `weight`/`description`
   重置成新类型的默认值（0.7 / 空）**，除非你在同一次调用里显式给出——旧关系的权重不该跟着新关系跑。
   缺省或空的 `weight`/`description` 则视为「没说」，不会覆盖已有边的值。
+- **删卡是两步的**：`memory_forget` 不带 `confirm` 只返回**预览**（目标路径 + 有多少张卡引用了它），
+  **一个字节都不动**；带 `confirm: true` 才真删。这不是啰嗦，是**防误删的硬闸**——规矩写在提示词里
+  约束不住执行者（会读、会引用、仍然照删），只有参数级的闸门绕不过去。`permanent: true` 同样要确认。
+- **软删是「搬到 `_trashed/`」，不是隐藏**。`_trashed/` 在库里面，Obsidian 照样看得见那些卡，
+  `[[双链]]` 也不会断（指向的文件只是换了目录）。想恢复：把文件拖回原目录，或把 `status` 改回 `approved`。
 
 ## 踩过的两个坑
 

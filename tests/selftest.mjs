@@ -837,8 +837,23 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(typeof r.trashed, 'number')
   })
 
-  it('memory_forget 软删 → status: deleted + 移进 _trashed/', async () => {
-    const r = await call('memory_forget', { title: '带死链的卡' })
+  // 2026-09-28 事故后加的硬闸：不传 confirm 一律不落手。
+  // 背景：误删的根因不是「不知道规矩」，而是「执行时没人拦」——提示词约束不了执行者。
+  it('memory_forget 不传 confirm → 只预览，一个字节都不动', async () => {
+    const before = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '带死链的卡.md'), 'utf8')
+    const p = await call('memory_forget', { title: '带死链的卡' })
+    assert.equal(p.mode, 'preview', '缺省必须只预览')
+    assert.ok(p.path.includes('带死链的卡'), '预览要给出目标路径')
+    assert.ok(Number.isInteger(p.referrers), '要报告有多少卡引用了它')
+    // 关键断言：预览之后磁盘必须**逐字节**不变
+    const after = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '带死链的卡.md'), 'utf8')
+    assert.equal(after, before, '预览绝不许动文件')
+    const stillThere = await call('memory_search', { query: '死链' })
+    assert.ok(stillThere.returned > 0, '预览后卡片仍应被检索到')
+  })
+
+  it('memory_forget 传 confirm: true 才真删 → status: deleted + 移进 _trashed/', async () => {
+    const r = await call('memory_forget', { title: '带死链的卡', confirm: true })
     assert.equal(r.mode, 'trashed')
     assert.ok(r.path.includes('_trashed'), `应落进回收站，实际 ${r.path}`)
     assert.ok(fs.existsSync(r.path))
@@ -849,6 +864,16 @@ describe('工具真实调用（临时库）', () => {
   it('memory_forget 软删后不该被检索到', async () => {
     const r = await call('memory_search', { query: '死链' })
     assert.equal(r.returned, 0)
+  })
+
+  it('memory_forget permanent 也要 confirm（双保险）', async () => {
+    await call('memory_save', { title: '永久删预览卡', content: '用于验证 permanent 也受 confirm 保护。' })
+    const p = await call('memory_forget', { title: '永久删预览卡', permanent: true })
+    assert.equal(p.mode, 'preview', 'permanent 缺 confirm 时也只能预览')
+    assert.ok(fs.existsSync(p.path), '文件必须还在')
+    const gone = await call('memory_forget', { title: '永久删预览卡', permanent: true, confirm: true })
+    assert.equal(gone.mode, 'deleted')
+    assert.equal(fs.existsSync(gone.path), false, '这次才真的删')
   })
 
   it('memory_forget 不存在的卡 → not-found，不报错', async () => {
