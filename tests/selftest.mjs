@@ -934,6 +934,43 @@ describe('工具真实调用（临时库）', () => {
     assert.ok(r.kinds.some(k => k.dir === '08-Mistakes' && k.count >= 1), '08-Mistakes 应有卡')
     assert.ok(r.deadLinks.some(l => l.includes('一张不存在的卡')), '死链要报出来')
     assert.equal(typeof r.trashed, 'number')
+    assert.equal(typeof r.externalLinks, 'number', '库外链接计数必须存在')
+  })
+
+  // 2026-09-28 实测事故：卡里指向知识库（库外）的链接被报成死链——
+  // 而 Obsidian 是整库解析的，同一份链接在那边是绿的。两个工具给相反结论，会让人白排查。
+  it('memory_stats 不把「指向库外的链接」误报成死链，库内错链照报', async () => {
+    await call('memory_save', {
+      title: '带库外链接的卡',
+      content: '见 [[技术/2026-09-28-viya-memory-改造与踩坑交接]]，以及 [[02-Projects/库里根本没有这张卡]]。',
+      kind: 'mistakes',
+    })
+    const r = await call('memory_stats', {})
+    assert.equal(r.externalLinks, 1, `库外那 1 条应单独计数，实际 ${r.externalLinks}`)
+    assert.ok(!r.deadLinks.some(l => l.includes('技术/')), `库外链接不许进死链，实际：${JSON.stringify(r.deadLinks)}`)
+    assert.ok(r.deadLinks.some(l => l.includes('02-Projects/库里根本没有这张卡')),
+      `库内目录前缀 + 卡不存在 = 真死链，必须照报，实际：${JSON.stringify(r.deadLinks)}`)
+
+    // 反面：不带路径的纯标题写错 → 依旧是真死链（不能被「库外」这条豁免吃掉）
+    await call('memory_save', { title: '带纯标题错链的卡', content: '指向 [[库里压根没这个标题]]，应判死链。', kind: 'mistakes' })
+    const r2 = await call('memory_stats', {})
+    assert.ok(r2.deadLinks.some(l => l.includes('库里压根没这个标题')), '纯标题错链必须继续报死链')
+    assert.equal(r2.externalLinks, 1, '纯标题错链不该被算成库外链接')
+  })
+
+  // 2026-09-28 真实库实测撞出的第二种误报：链接按**文件名**写（标题里有空格，文件名是连字符），
+  // 而匹配集合当时只装标题 → 明明在库里的卡被判成死链。Obsidian 按文件名解析，它那边是绿的。
+  it('memory_stats：按文件名写的库内链接不算死链（标题与文件名不一致）', async () => {
+    await call('memory_save', { title: '标题里有 空格 的卡', content: '正文内容与其它卡都不同，用于文件名解析测试。', kind: 'mistakes' })
+    const file = fs.readdirSync(path.join(lib.dir, '08-Mistakes')).find(f => f.startsWith('标题里有'))
+    assert.ok(file, '前提：铺底卡应已落盘')
+    const base = path.basename(file, '.md')
+    assert.notEqual(base, '标题里有 空格 的卡', '前提：文件名必须与标题真的不同，否则这条测试没有区分力')
+
+    await call('memory_save', { title: '按文件名引用的卡', content: `指向 [[08-Mistakes/${base}]]，不该被判成断链。`, kind: 'mistakes' })
+    const r = await call('memory_stats', {})
+    assert.ok(!r.deadLinks.some(l => l.includes(base)),
+      `按文件名写的库内链接不许判死链，实际：${JSON.stringify(r.deadLinks)}`)
   })
 
   // 2026-09-28 事故后加的硬闸：不传 confirm 一律不落手。
@@ -961,8 +998,10 @@ describe('工具真实调用（临时库）', () => {
   })
 
   it('memory_forget 软删后不该被检索到', async () => {
-    const r = await call('memory_search', { query: '死链' })
-    assert.equal(r.returned, 0)
+    // 搜被删卡的**标题**，不是「死链」这种通用词——用通用词会让这条测试
+    // 悄悄依赖「全库只有那一张卡含该词」，任何新卡带这个词就假失败（2026-09-28 被咬过一次）。
+    const r = await call('memory_search', { query: '带死链的卡' })
+    assert.equal(r.returned, 0, '软删的卡不该再被检索到')
   })
 
   it('memory_forget permanent 也要 confirm（双保险）', async () => {
