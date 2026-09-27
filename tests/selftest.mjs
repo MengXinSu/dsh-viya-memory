@@ -122,6 +122,23 @@ describe('模块与工具注册', () => {
     assert.equal(plain.sensitiveScan, false)
   })
 
+  // 默认值本身也要测：上面每条断言都显式传了 hardLimit，默认值写错时
+  // 那 78 条会全绿——正是最该防的静默失效。这里只给 library，其余字段吃默认。
+  it('默认值：hardLimit 是 4000，软限/硬限关系成立，源码不残留旧值', () => {
+    const byDefault = mod.__internals.unwrapConfig(mod.Config({ library: 'C:\\default-vault' }))
+    assert.equal(byDefault.hardLimit, 4000, 'hardLimit 默认值必须是 4000')
+    assert.equal(byDefault.softLimit, 400, 'softLimit 默认值必须是 400')
+    assert.ok(byDefault.hardLimit > byDefault.softLimit, '默认值也必须满足硬限 > 软限')
+    const srcText = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+    assert.ok(/\.default\(4000\)/.test(srcText),
+      '源码 schema 里找不到 .default(4000)——默认值被改坏了')
+    // 源码里不该再有旧数值；改上限时，这条会连同断言一起报错提醒（而不是静默放行）
+    const src = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
+    assert.ok(!/default\(800\)/.test(src), '源码里还有 default(800)——上限改回旧值了？')
+    const self = fs.readFileSync(new URL('./selftest.mjs', import.meta.url), 'utf8')
+    assert.ok(!/'字'\.repeat\(801\)/.test(self), '自测里还有 801 的旧边界用例——它测的是空气')
+  })
+
   it('apply 注册七个工具 + 一个 user.md section', () => {
     const { ctx, tools, sections } = makeCtx()
     mod.apply(ctx, { library: 'C:\\nope' })
