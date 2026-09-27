@@ -134,7 +134,8 @@ describe('模块与工具注册', () => {
       '源码 schema 里找不到 .default(4000)——默认值被改坏了')
     // 源码里不该再有旧数值；改上限时，这条会连同断言一起报错提醒（而不是静默放行）
     const src = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
-    assert.ok(!/default\(800\)/.test(src), '源码里还有 default(800)——上限改回旧值了？')
+    assert.ok(!/default\(400\)/.test(src), '源码里还有 default(400)——软限改回旧值了？')
+    assert.ok(!/≤ 400 字/.test(src), '工具描述里还有「≤ 400 字」旧文案')
     const self = fs.readFileSync(new URL('./selftest.mjs', import.meta.url), 'utf8')
     assert.ok(!/'字'\.repeat\(801\)/.test(self), '自测里还有 801 的旧边界用例——它测的是空气')
   })
