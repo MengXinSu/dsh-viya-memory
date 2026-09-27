@@ -524,7 +524,7 @@ describe('工具真实调用（临时库）', () => {
     )
   })
 
-  it('memory_save 超硬限的新卡 → 报错并提示拆分', async () => {
+  it('memory_save 超硬限的新卡 → 报错并提示写文件', async () => {
     await assert.rejects(
       () => call('memory_save', { title: '一张超长的卡', content: '字'.repeat(4001) }),
       /硬限/,
