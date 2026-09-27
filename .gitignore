@@ -12,3 +12,17 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# 本地配置与备份 —— 里面通常带着**真实 vault 路径**（有时还有密钥），
+# 一次 `git add -A` 就能把隐私推上公开仓库，所以宁可挡死。
+# 注意：本仓库要用到的 cordis.patch.yml 是脱敏模板，不匹配下面的规则。
+*.bak
+*.bak-*
+*.old
+*.orig
+*.local
+*.env
+.env*
+!*.env.example
+cordis.patch.yml.bak*
+*_backup-*/
