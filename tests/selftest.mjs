@@ -39,7 +39,7 @@ function makeCtx() {
 
 function tempLibrary() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-memory-test-'))
-  return { dir, config: { library: dir, softLimit: 400, hardLimit: 4000, searchBudget: 2000, sensitiveScan: true } }
+  return { dir, config: { library: dir, softLimit: 1000, hardLimit: 4000, searchBudget: 2000, sensitiveScan: true } }
 }
 
 const EXPECTED_TOOLS = [
@@ -110,7 +110,7 @@ describe('模块与工具注册', () => {
     assert.equal(typeof cfg.searchBudget, 'number', 'searchBudget 解包后必须是 number，否则检索预算失效')
     assert.equal(typeof cfg.sensitiveScan, 'boolean', 'sensitiveScan 解包后必须是 boolean，否则敏感信息扫描会被绕过')
     assert.equal(typeof cfg.userFile, 'string', 'userFile 解包后必须是 string，否则 user.md 路径会变成 [object Object]')
-    assert.equal(cfg.softLimit, 400)
+    assert.equal(cfg.softLimit, 1000)
     assert.equal(cfg.hardLimit, 4000)
     // 比较语义必须成立（盒子做 > 比较永远是 false）
     assert.ok(cfg.hardLimit > cfg.softLimit, '硬限必须真的大于软限')
@@ -127,7 +127,7 @@ describe('模块与工具注册', () => {
   it('默认值：hardLimit 是 4000，软限/硬限关系成立，源码不残留旧值', () => {
     const byDefault = mod.__internals.unwrapConfig(mod.Config({ library: 'C:\\default-vault' }))
     assert.equal(byDefault.hardLimit, 4000, 'hardLimit 默认值必须是 4000')
-    assert.equal(byDefault.softLimit, 400, 'softLimit 默认值必须是 400')
+    assert.equal(byDefault.softLimit, 1000, 'softLimit 默认值必须是 1000')
     assert.ok(byDefault.hardLimit > byDefault.softLimit, '默认值也必须满足硬限 > 软限')
     const srcText = fs.readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8')
     assert.ok(/\.default\(4000\)/.test(srcText),
@@ -526,7 +526,21 @@ describe('工具真实调用（临时库）', () => {
   it('memory_save 超硬限的新卡 → 报错并提示拆分', async () => {
     await assert.rejects(
       () => call('memory_save', { title: '一张超长的卡', content: '字'.repeat(4001) }),
-      /卡 \+ 指针|硬限/,
+      /硬限/,
+    )
+  })
+
+  it('memory_save 超过软限 → 返回提示但仍写入（只提示不拦）', async () => {
+    const r = await call('memory_save', { title: '软限提示卡', content: '字'.repeat(1001) })
+    assert.ok(r.action.includes('软限'), 'action 里必须有软限提示，实际：' + r.action)
+    assert.ok(r.words === 1001, '正文应当真的写进去了（软限只提示不拦）')
+  })
+
+  it('memory_update 更新后超硬限 → 报错', async () => {
+    await call('memory_save', { title: '待更新的卡', content: '起' })
+    await assert.rejects(
+      () => call('memory_update', { title: '待更新的卡', content: '字'.repeat(4001) }),
+      /硬限/,
     )
   })
 
