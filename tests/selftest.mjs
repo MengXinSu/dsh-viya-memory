@@ -214,6 +214,25 @@ describe('frontmatter 解析与生成', () => {
     assert.equal(back.links.find(l => l.target === '另一张卡').weight, 0.8)
   })
 
+  // 2026-09-28：正文里写代码示例（反引号/围栏块）时，里面的 `[[...]]` 被当成真链接，
+  // 于是 links 里多出一条假边（target 变成一段文字）——在教训卡上实测到。
+  it('反引号与代码块里的 [[...]] 不算关系边', () => {
+    const body = [
+      '行内示例：`[[假目标]]` 应该被忽略。',
+      '',
+      '```js',
+      '// 代码块里的 [[另一个假目标]] 也是示例',
+      'const x = 1',
+      '```',
+      '',
+      '而 [[真目标]] 才算。',
+    ].join('\n')
+    const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/03-Knowledge/t.md')
+    assert.deepEqual(card.links.map(l => l.target), ['真目标'], '只该留下代码外的真链接')
+    assert.equal(I.stripCode('`[[a]]`'), ' ')
+    assert.equal(I.stripCode('前 `[[a]]` 后').includes('[['), false)
+  })
+
   it('正文里的 [[双链]] 会被算成关系边（related）', () => {
     const body = '见 [[旧卡的标题]] 和 [[另一张|显示名]]。'
     const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/03-Knowledge/t.md')
