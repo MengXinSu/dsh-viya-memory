@@ -609,6 +609,30 @@ describe('工具真实调用（临时库）', () => {
     assert.equal((await call('memory_search', { query: '*', threshold: 99999 })).returned, 0)
   })
 
+  it('memory_search limit：不传默认 10、无上限、下限 1；被截断时如实报告总数', async () => {
+    // 本套件此刻库里只有 8 张卡。铺到 >21 张：一是让默认值有区分力（旧的 5 与新的 10 必须能判开），
+    // 二是必须**越过旧的 20 条上限**——否则把上限加回去这条测试也照样绿（实测：12 张时抓不住）。
+    for (let i = 1; i <= 25; i++) {
+      await call('memory_save', { title: `limit 铺底卡 ${i}`, content: `第 ${i} 张铺底卡，内容互不相同。` })
+    }
+    const all = await call('memory_search', { query: '*', limit: 9999 })
+    const total = all.returned
+    assert.ok(total >= 25, `铺底卡不足，无法验证「无上限」，实际总数 ${total}`)
+    assert.ok(total > 20, `必须越过旧的 20 条上限，实际总数 ${total}`)
+    assert.equal(all.total, total, '未截断时 total 应等于 returned')
+
+    const byDefault = await call('memory_search', { query: '*' })
+    assert.equal(byDefault.returned, 10, '不传 limit 时默认必须返回 10 条')
+    assert.equal(byDefault.results.length, 10)
+    assert.equal(byDefault.total, total, 'total 应报告真实命中总数，不受 limit 影响')
+
+    const big = await call('memory_search', { query: '*', limit: total + 50 })
+    assert.equal(big.returned, total, 'limit 大于库内总数时应返回全部（旧的上限 20 会在这里截断）')
+    assert.equal(big.total, total, 'total 应报告真实命中总数')
+
+    assert.equal((await call('memory_search', { query: '*', limit: 0 })).returned, 1, 'limit 0 归 1，不是空结果')
+  })
+
   it('memory_read 能按标题与按路径读，附上图片绝对路径', async () => {
     const byTitle = await call('memory_read', { title: '并发写冲突' })
     assert.equal(byTitle.found, true)
