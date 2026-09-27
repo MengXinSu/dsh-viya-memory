@@ -140,6 +140,30 @@ describe('模块与工具注册', () => {
     assert.ok(!/'字'\.repeat\(801\)/.test(self), '自测里还有 801 的旧边界用例——它测的是空气')
   })
 
+  // 渲染层单独测：今天那个 bug（括号嵌套 + 字数重复）就藏在 render 里，
+  // 而 81 条测试全在测业务逻辑，没一条碰过 render 输出。
+  it('memory_save 的 render：action 用分隔符拼接，不嵌套括号、不重复字数', async () => {
+    const tools = new Map()
+    const fakeCtx = {
+      tools: { register: (def) => tools.set(def.name, def) },
+      systemPrompt: { section: (x) => x },
+      effect: () => {}, on: () => {},
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    }
+    mod.apply(fakeCtx, { library: 'C:\\nope', softLimit: 1000, hardLimit: 4000 })
+    const save = tools.get('memory_save')
+    const plain = save.output.render({}, { title: 'T', path: 'C:\\x\\T.md', words: 300, action: '新建' })[0].text
+    assert.ok(plain.includes('正文 300 字 · 新建'), '普通写入应当是「字数 · 动作」：' + plain)
+    assert.ok(!plain.includes('（新建）'), '不该把 action 包进括号（历史 bug：括号嵌套不闭合）')
+    const warned = save.output.render({}, {
+      title: 'T2', path: 'C:\\x\\T2.md', words: 1484,
+      action: '新建\n（正文 1484 字，超过软限 1000——偏长了，建议精简）',
+    })[0].text
+    assert.ok(warned.includes('超过软限'), '软限提示必须能渲染出来')
+    assert.ok((warned.match(/正文 1484 字/g) || []).length === 2,
+      '字数在外层和软限提示里各出现一次是已知的轻微重复，若结构变了请更新本测试')
+  })
+
   it('apply 注册七个工具 + 一个 user.md section', () => {
     const { ctx, tools, sections } = makeCtx()
     mod.apply(ctx, { library: 'C:\\nope' })
