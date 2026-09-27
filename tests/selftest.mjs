@@ -591,9 +591,97 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(tc.links.find(l => l.target === '并发写冲突').weight, 0.8)
   })
 
+  // 与上一条分开：这里只问「完全一样的边再来一次会不会重复写」，
+  // 所以参数带全——不然缺省的 related 会去改上一条测试留下的 contradicts 边。
   it('memory_link 重复连边 → 跳过不重复写', async () => {
-    const r = await call('memory_link', { source: '并发写冲突', target: '被连的卡' })
+    const r = await call('memory_link', {
+      source: '并发写冲突', target: '被连的卡', type: 'explains', weight: 0.8, description: '互为因果',
+    })
     assert.equal(r.status, 'already-linked')
+  })
+
+  // 2026-09-27 实测事故：标签/关键词里的逗号被 `split(',')` 劈成两个元素，
+  // 落盘后 Obsidian 与插件自己都读成两个标签，且 tags 过滤再也匹配不上。
+  it('数组元素含逗号 → 往返不劈开，tags 过滤仍能命中', async () => {
+    const both = ['标签1,标签2', '普通']
+    const host = I.parseCard(
+      I.serializeCard({ title: '逗号卡', tags: both, keywords: ['k1,k2'], body: 'x' }),
+      '/x/03-Knowledge/t.md',
+    )
+    assert.deepEqual(host.tags, both, '标签被逗号劈开了')
+    assert.deepEqual(host.keywords, ['k1,k2'], '关键词被逗号劈开了')
+
+    await call('memory_save', { title: '标签过滤卡', content: '逗号标签的过滤验证。', tags: both })
+    const hit = await call('memory_search', { query: '*', tags: ['标签1,标签2'] })
+    assert.equal(hit.total, 1, '含逗号的完整标签必须能命中')
+    const miss = await call('memory_search', { query: '*', tags: ['标签2'] })
+    assert.equal(miss.total, 0, '被劈开的半截标签不该命中')
+  })
+
+  // 同源第二个事故：边描述里的逗号把后面的字段吃掉（type 退回 related、描述被截断）。
+  it('内联对象含逗号/引号 → 字段不串扰，描述不丢', async () => {
+    const obj = I.parseInlineObject("{target: B, type: explains, weight: 0.8, description: 说明含逗号, 后半}")
+    assert.equal(obj.type, 'explains')
+    assert.equal(obj.weight, 0.8)
+    assert.equal(obj.description, '说明含逗号, 后半')
+
+    const card = I.parseCard(
+      I.serializeCard({
+        title: 'A',
+        tags: ['x'],
+        links: [{ target: 'B', type: 'contradicts', weight: 0.9, description: '带,逗号 与 \'单引号\'' }],
+        body: 'x',
+      }),
+      '/x/03-Knowledge/a.md',
+    )
+    const edge = card.links.find(l => l.target === 'B')
+    assert.equal(edge.type, 'contradicts', '关系类型被逗号吃掉了')
+    assert.equal(edge.weight, 0.9)
+    assert.ok(edge.description.includes('单引号'), '描述里的引号丢了')
+  })
+
+  // 原实现按「目标卡」去重：同一对卡连不上第二种关系，且正文 callout 与 frontmatter 打架。
+  it('memory_link 支持同目标不同类型；未提供的字段不覆盖已有边', async () => {
+    await call('memory_save', { title: '边测试A', content: 'A 卡内容独立。', kind: 'projects' })
+    await call('memory_save', { title: '边测试B', content: 'B 卡内容独立。', kind: 'projects' })
+    const first = await call('memory_link', {
+      source: '边测试A', target: '边测试B', type: 'related', weight: 0.8, description: '先相关',
+    })
+    assert.equal(first.status, 'created')
+
+    // 不给 weight/description → 是「没说」，不该把 0.8 冲成 0.7
+    const same = await call('memory_link', { source: '边测试A', target: '边测试B', type: 'related' })
+    assert.equal(same.status, 'already-linked', '完全重复的边应当跳过')
+    const keep = I.parseCard(
+      fs.readFileSync((await call('memory_read', { title: '边测试A' })).path, 'utf8'),
+      '/x/03-Knowledge/a.md',
+    )
+    assert.equal(keep.links.find(l => l.target === '边测试B').weight, 0.8, '没给 weight 却被覆盖了')
+
+    // 换成另一种关系 → 应当更新，而不是拒绝
+    const change = await call('memory_link', { source: '边测试A', target: '边测试B', type: 'contradicts' })
+    assert.equal(change.status, 'updated', '同一对卡应当能改关系类型')
+    const after = I.parseCard(
+      fs.readFileSync((await call('memory_read', { title: '边测试B' })).path, 'utf8'),
+      '/x/03-Knowledge/b.md',
+    )
+    assert.equal(after.links.find(l => l.target === '边测试A').type, 'contradicts')
+    assert.ok(after.body.includes('> contradicts:'), '正文 callout 必须跟着换成新类型')
+  })
+
+  // IMAGE_EXT 原先定义完从没被用过：任何后缀都会被当本地图片拷进库。
+  it('图片只认图片后缀；相对路径按库根解析', async () => {
+    assert.equal(I.isLocalImagePath('a.png'), true)
+    assert.equal(I.isLocalImagePath('a.md'), false, '非图片后缀不该被当本地图片')
+    assert.equal(I.isLocalImagePath('a.txt'), false)
+    assert.equal(I.isLocalImagePath('https://x/a.png'), false)
+    const dir = tempLibrary().dir
+    assert.equal(
+      I.resolveImagePath('./attachments/a.png', dir),
+      path.join(dir, 'attachments/a.png'),
+      '带目录的相对路径必须以库根为基准',
+    )
+    assert.equal(I.resolveImagePath('a.png', dir), 'a.png', '裸文件名保持旧行为')
   })
 
   it('memory_link 一边找不到 → 整条不写，不留单向边', async () => {
