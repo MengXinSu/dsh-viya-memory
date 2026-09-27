@@ -673,10 +673,47 @@ describe('工具真实调用（临时库）', () => {
   })
 
   // IMAGE_EXT 原先定义完从没被用过：任何后缀都会被当本地图片拷进库。
+  // 2026-09-27：Obsidian 里手写 `tags: 技术`（标量）会被旧代码当非数组**整组丢掉**，
+  // 而且下一次写入会把字段彻底抹平；`keywords: a, b` 同理。
+  it('tags/keywords 写成标量也不丢（兼容手写卡）', () => {
+    const one = I.parseCard('---\ntitle: t\ntags: 技术\n---\n正文', '/x/03-Knowledge/t.md')
+    assert.deepEqual(one.tags, ['技术'], '单个标量标签不该丢')
+    const many = I.parseCard('---\ntitle: t\nkeywords: mtime, 并发, 冲突\n---\n正文', '/x/03-Knowledge/t.md')
+    assert.deepEqual(many.keywords, ['mtime', '并发', '冲突'], '逗号分隔的标量关键词不该丢')
+    assert.deepEqual(I.asStringList(undefined), [])
+    assert.deepEqual(I.asStringList(['a', ' ', 'b']), ['a', 'b'], '数组里的空项要清掉')
+  })
+
+  // 2026-09-27 对抗审查实测：值里带换行会把 frontmatter 写成两行，
+  // 回读时多出一条假边 / 整组标签变空。frontmatter 是逐行解析的，值必须单行化。
+  it('值里的换行被压成单行，不写坏 frontmatter', async () => {
+    assert.equal(I.flattenLine('a\nb'), 'a b')
+    assert.equal(I.flattenLine('a\r\nb\r\n'), 'a b')
+    const card = I.parseCard(
+      I.serializeCard({ title: 't', tags: ['ok', 'a\nb'], keywords: ['x\ny'], body: 'b' }),
+      '/x/03-Knowledge/t.md',
+    )
+    assert.deepEqual(card.tags, ['ok', 'a b'], '带换行的标签把整组写坏了')
+    assert.deepEqual(card.keywords, ['x y'])
+
+    await call('memory_save', { title: '换行源卡', content: '源卡内容独立。', kind: 'projects' })
+    await call('memory_save', { title: '换行目标卡', content: '目标卡内容独立。', kind: 'projects' })
+    await call('memory_link', { source: '换行源卡', target: '换行目标卡', description: 'a\nb' })
+    const r = await call('memory_read', { title: '换行源卡' })
+    const back = I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path)
+    assert.equal(back.links.length, 1, `带换行的描述写出了假边：${JSON.stringify(back.links)}`)
+    assert.equal(back.links[0].description, 'a b')
+    assert.ok(back.body.includes('（a b）'), '正文 callout 里的描述也被换行截断了')
+  })
+
   it('图片只认图片后缀；相对路径按库根解析', async () => {
     assert.equal(I.isLocalImagePath('a.png'), true)
+    assert.equal(I.isLocalImagePath('a.svg'), true)
+    assert.equal(I.isLocalImagePath('a.avif'), true)
     assert.equal(I.isLocalImagePath('a.md'), false, '非图片后缀不该被当本地图片')
     assert.equal(I.isLocalImagePath('a.txt'), false)
+    assert.equal(I.isLocalImagePath('a.verylongext'), false, '长后缀不该漏网')
+    assert.equal(I.isLocalImagePath('图.1'), true, '点+数字不是扩展名，照旧当本地路径')
     assert.equal(I.isLocalImagePath('https://x/a.png'), false)
     const dir = tempLibrary().dir
     assert.equal(
@@ -684,7 +721,33 @@ describe('工具真实调用（临时库）', () => {
       path.join(dir, 'attachments/a.png'),
       '带目录的相对路径必须以库根为基准',
     )
-    assert.equal(I.resolveImagePath('a.png', dir), 'a.png', '裸文件名保持旧行为')
+    assert.equal(
+      I.resolveImagePath('a.png', dir),
+      path.join(dir, 'a.png'),
+      '裸文件名也要以库根为基准（不能再跟进程 cwd 跑）',
+    )
+  })
+
+  // 2026-09-27：给 findCard 加库根回落时不能连库外一起放进来——
+  // memory_forget 是会真把文件搬进 _trashed 的。
+  it('库内相对路径可读；相对路径不许越出库根', async () => {
+    await call('memory_save', { title: '库内卡', content: '库内卡内容独立。', kind: 'projects' })
+    const relPath = path.join(lib.dir, '02-Projects', '库内卡.md')
+    assert.equal(fs.existsSync(relPath), true, '前置条件：文件确实在库内')
+    const got = await call('memory_read', { title: '02-Projects/库内卡.md' })
+    assert.ok(got.body.includes('库内卡内容独立'), '库内相对路径应当能读到')
+
+    const outside = path.join(path.dirname(lib.dir), 'outside-probe.md')
+    fs.writeFileSync(outside, '---\ntitle: 库外卡\n---\n库外内容', 'utf8')
+    // 注意：memory_read 对找不到的卡是**返回 found:false**（不抛异常），按契约断言这一点
+    const escaped = await call('memory_read', { title: '../outside-probe.md' })
+    assert.equal(escaped.found, false, '../ 相对路径不该读到库外文件')
+    assert.equal(escaped.body, '', '不该把库外内容带出来')
+    assert.equal(fs.existsSync(outside), true, '库外文件必须原样还在')
+    // 而绝对路径依然可用（工具文档承诺支持）：同一张卡用绝对路径能读
+    const byAbs = await call('memory_read', { title: relPath })
+    assert.equal(byAbs.found, true, '库内绝对路径必须仍能读')
+    fs.rmSync(outside, { force: true })
   })
 
   // 2026-09-27 实测：标题前 60 字相同的两张卡撞同一文件名，第二张被判「重合」静默拒写。
