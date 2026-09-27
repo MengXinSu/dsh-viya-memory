@@ -77,7 +77,7 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 | `memory_save` | **`title`** · **`content`** · `kind` · `tags` · `keywords` · `importance` · `links` · `severity` · `occurred_at` | 拼 frontmatter、按 kind 选目录、slug 文件名、原子写、搬运正文里的本地图片 |
 | `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 摘要；`query` 支持 `\|` 分关键词（AND）与 `*` 通配 |
 | `memory_read` | **`title`** 或 **`path`** | 正文全文 + `status`/`updated`/`links` + 附件绝对路径（不自动读图，图片 token 贵） |
-| `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
+| `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` · `occurred_at` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
 | `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条 `[[]]`；两边都找得到才写 |
 | `memory_forget` | **`title`** · `permanent` | 默认软删（`status: deleted` + 挪进 `_trashed/`），`permanent: true` 才真删 |
 | `memory_stats` | 无 | 只读体检：总卡数 / 分布 / 超长卡 / **死链** / 回收站 |
@@ -112,10 +112,29 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 node --test tests/selftest.mjs
 ```
 
-**64 项，全部走真实执行路径**：frontmatter 解析与往返、slug、kind 三道闸、三层长度闸、
-bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组与权重、七个工具的完整行为
-（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链）、`user.md` 注入、
-以及一个在系统临时目录里跑的真文件系统端到端冒烟。
+**75 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
+与文件名撞车、kind 三道闸、三层长度闸、bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组
+与权重、七个工具的完整行为（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链 /
+路径夹取）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
+
+其中相当一部分是**被测出来的 bug 反向补的回归用例**——标量标签、值里带换行、超长标题撞文件名、
+相对路径越出库根、换关系类型继承旧权重，都在这一栏里。
+
+## 行为细则（几个不写下来一定会踩的地方）
+
+- **标签与关键词**：`tags: [a, b]` 是正路；`a, b` 这种标量写法也认。**值里可以带逗号**——序列化时会
+  自动加引号（`['标签1,标签2']` 是一个标签，不是两个）。同理，值里的换行会被压成空格，不会把
+  frontmatter 写成两行。
+- **文件名只是存储**：标题 → 文件名的映射按**字节**截断（150 字节上限）。两个长标题即使截断后同名，
+  也不会互相顶掉或误判「内容重合」——撞车时后者自动让位成 `名-2.md`。判重只看「同一张卡」，不看文件名。
+- **路径口径**：卡内引用的相对路径、以及 `memory_read` 的相对路径，都以**库根**为基准（和 Obsidian
+  一致），不看进程 cwd。`.md` 以外、又带非图片后缀的路径不会被当图片搬走。绝对路径照常可用。
+- **能力边界**：`memory_read` 可以读**库外**文件（你要看附件绝对路径时会用到）；但
+  `memory_forget` / `memory_save` / `memory_update` / `memory_link` 一律只认库内——删除和改写不会
+  被一条参数带到库外去。
+- **关系边**：目标 + 类型相同即视为「已有这条边」，再次调用跳过；**换 `type` 会把 `weight`/`description`
+  重置成新类型的默认值（0.7 / 空）**，除非你在同一次调用里显式给出——旧关系的权重不该跟着新关系跑。
+  缺省或空的 `weight`/`description` 则视为「没说」，不会覆盖已有边的值。
 
 ## 踩过的两个坑
 
@@ -126,7 +145,7 @@ bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组�
    于是 `String(库路径)` 得到 `"[object Object]"`，卡片全写进了一个叫 `[object Object]` 的目录。
    更阴的是另外五个配置项：字数硬限、检索预算全变成 NaN 比较，**永远返回 false**——不报错，只是不生效。
 
-两条都补成了防复发自测（静态扫描 `ctx.xxx` 与 `inject` 声明比对；拿真 schema 解析一次验类型），现在 64 项全绿。
+两条都补成了防复发自测（静态扫描 `ctx.xxx` 与 `inject` 声明比对；拿真 schema 解析一次验类型），现在 75 项全绿。
 
 ## 碎碎念
 
