@@ -1710,7 +1710,8 @@ describe('审查修复④：save 只写库内一级卡目录', () => {
         path.join(lib.dir, '根上的卡'),
         path.join(lib.dir, '_trashed', '回收站里的卡'),
         path.join(lib.dir, '.obsidian', '配置里的卡'),
-        path.join(lib.dir, '03-Knowledge', 'sub', '深层卡'),
+        path.join(lib.dir, '03-Knowledge', '.hidden', '保留子目录里的卡'),
+        path.join(lib.dir, '03-Knowledge', ...Array.from({ length: 9 }, (_, i) => `d${i}`), '过深的卡'),
       ]
       for (const p of bad) {
         await assert.rejects(() => call('memory_save', { title: p, content: '不该落盘的内容，独立。' }), /拒绝写入/, `应拒绝：${p}`)
@@ -2066,6 +2067,81 @@ describe('工具调用体验修复', () => {
       assert.equal(up.path, old, '老卡追加要写回原文件，不能另起一张')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// 2026-09-28 交接遗留②：卡目录支持子目录（Obsidian 里手建的子文件夹）
+describe('子目录支持', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+  const card = (title, body) => `---\ntitle: '${title}'\ntags: [子]\n---\n\n${body}\n`
+
+  it('子目录里的卡：search / read / stats / update / link / forget 全都认，kind 记一级目录', async () => {
+    const { lib, call } = fresh()
+    try {
+      const sub = path.join(lib.dir, '03-Knowledge', '子文件夹', '更深')
+      fs.mkdirSync(sub, { recursive: true })
+      const f = path.join(sub, '深处卡.md')
+      fs.writeFileSync(f, card('深处卡', '藏在子目录里的独特内容甲乙丙。'), 'utf8')
+      // 保留子目录里的不算卡
+      fs.mkdirSync(path.join(lib.dir, '03-Knowledge', '.obsidian'), { recursive: true })
+      fs.writeFileSync(path.join(lib.dir, '03-Knowledge', '.obsidian', '隐藏.md'), card('隐藏', '独特内容甲乙丙。'), 'utf8')
+      await call('memory_save', { title: '顶层卡', content: '顶层卡内容，独立。' })
+      // 按绝对路径直取保留子目录里的文件：update / forget 都不能碰（M40：只查首段会放行）
+      const hidden = path.join(lib.dir, '03-Knowledge', '.obsidian', '隐藏.md')
+      await assert.rejects(() => call('memory_update', { title: hidden, importance: 5 }), /记忆不存在/)
+      assert.equal((await call('memory_forget', { title: hidden, confirm: true })).mode, 'not-found')
+      assert.ok(fs.existsSync(hidden) && !fs.readFileSync(hidden, 'utf8').includes('importance: 5'), '保留子目录文件必须原样')
+
+      const s = await call('memory_search', { query: '独特内容' })
+      assert.equal(s.total, 1, `只该命中子目录那张，实际 ${s.total}`)
+      assert.equal(s.results[0].kind, '03-Knowledge', `kind 要记一级目录，实际 ${s.results[0].kind}`)
+      assert.equal((await call('memory_read', { title: '深处卡' })).found, true)
+
+      const st = await call('memory_stats', {})
+      assert.equal(st.total, 2, `体检要数到子目录卡，实际 ${st.total}`)
+
+      await call('memory_update', { title: '深处卡', importance: 5 })
+      assert.ok(fs.readFileSync(f, 'utf8').includes('importance: 5'), 'update 要原地写回子目录文件')
+      const ap = await call('memory_save', { title: '深处卡', content: '完全不同的追加内容子丑寅卯辰。' })
+      assert.equal(ap.path, f, '追加要写回原文件')
+      assert.ok(fs.readFileSync(f, 'utf8').includes('kind: 03-Knowledge'), 'kind 取一级目录，不是「更深」')
+
+      const l = await call('memory_link', { source: '顶层卡', target: '深处卡' })
+      assert.equal(l.status, 'created')
+      const p = await call('memory_forget', { title: '深处卡' })
+      assert.equal(p.referrers, 1, `预览要数到引用，实际 ${p.referrers}`)
+      const gone = await call('memory_forget', { title: '深处卡', confirm: true })
+      assert.equal(gone.mode, 'trashed')
+      assert.ok(!fs.existsSync(f) && fs.existsSync(gone.path), '子目录卡要搬进回收站')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('save 可按路径写进子目录；junction 子目录不跟随', async () => {
+    const { lib, call } = fresh()
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-subj-'))
+    try {
+      const target = path.join(lib.dir, '03-Knowledge', '子', '路径卡')
+      const r = await call('memory_save', { title: target, content: '按路径写进子目录，独立。' })
+      assert.equal(r.path, `${target}.md`)
+      assert.equal((await call('memory_search', { query: '按路径写进子目录' })).total, 1, '写进去要搜得到')
+
+      fs.writeFileSync(path.join(outside, '外.md'), card('库外junction卡', '不该被扫到的库外内容。'), 'utf8')
+      let linked = true
+      try { fs.symlinkSync(outside, path.join(lib.dir, '03-Knowledge', 'j'), 'junction') } catch { linked = false }
+      if (linked) {
+        assert.equal((await call('memory_search', { query: '不该被扫到' })).total, 0, 'junction 不能把库外卡带进来')
+        fs.unlinkSync(path.join(lib.dir, '03-Knowledge', 'j'))
+      }
+    } finally {
+      for (const d of [outside, lib.dir]) fs.rmSync(d, { recursive: true, force: true })
     }
   })
 })
