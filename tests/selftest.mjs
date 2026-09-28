@@ -2231,3 +2231,116 @@ describe('体检报重名卡', () => {
     }
   })
 })
+
+// ───────────────────────── 工具返回值必须满足自己声明的 output schema ─────────
+
+/**
+ * 声明式 JSON Schema 子集的校验器（与工具框架同构）。
+ * 无 async → 同步函数天然放行；`required: true` 写在属性里是这套 schema 的写法。
+ * 返回缺失/违规描述数组，空数组 = 通过。
+ */
+function schemaProblems(schema, value, at = 'value') {
+  const out = []
+  if (schema === undefined || schema === null) return out
+  if (schema.type === 'array') {
+    if (!Array.isArray(value)) return [`${at} 不是数组（实际 ${typeof value}）`]
+    for (let i = 0; i < value.length; i += 1) out.push(...schemaProblems(schema.items, value[i], `${at}[${i}]`))
+    return out
+  }
+  if (schema.type === 'object') {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return [`${at} 不是对象（实际 ${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}）`]
+    }
+    for (const [key, sub] of Object.entries(schema.properties ?? {})) {
+      const present = Object.prototype.hasOwnProperty.call(value, key)
+      if (!present) {
+        if (sub.required === true) out.push(`${at}.${key} 缺失（schema 声明为 required）`)
+        continue
+      }
+      out.push(...schemaProblems(sub, value[key], `${at}.${key}`))
+    }
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) {
+        if (!Object.prototype.hasOwnProperty.call(schema.properties ?? {}, key)) out.push(`${at}.${key} 不在 schema 里（additionalProperties: false）`)
+      }
+    }
+    return out
+  }
+  if (value === undefined) return out // 非 required 的可选字段允许缺省
+  switch (schema.type) {
+    case 'string': return typeof value === 'string' ? out : [`${at} 应为 string（实际 ${typeof value}）`]
+    case 'boolean': return typeof value === 'boolean' ? out : [`${at} 应为 boolean（实际 ${typeof value}）`]
+    case 'number': return typeof value === 'number' && Number.isFinite(value) ? out : [`${at} 应为 number（实际 ${typeof value}）`]
+    case 'integer': return Number.isInteger(value) ? out : [`${at} 应为 integer（实际 ${value}）`]
+    default: return out
+  }
+}
+
+describe('工具返回值满足声明的 output schema（2026-09-28 修复回归）', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, tools: made.tools, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  const expectOut = (tools, name, value) => {
+    const schema = tools.get(name).output.schema
+    const problems = schemaProblems(schema, value)
+    assert.deepEqual(problems, [], `${name} 的返回不符合自己声明的 output.schema：\n  ${problems.join('\n  ')}`)
+  }
+
+  it('memory_read 命中 → 不报 missing required property', async () => {
+    const { lib, tools, call } = fresh()
+    try {
+      const saved = await call('memory_save', { title: '命中卡', content: '正文若干。', keywords: '甲,乙' })
+      // 本次出 bug 的那个场景：suggestions 只在「找不到」分支给了值，
+      // 命中分支漏给 → 工具框架直接判 schema 违规，连卡都读不回来。
+      const hit = await call('memory_read', { title: '命中卡' })
+      assert.equal(hit.found, true, '标题精确命中')
+      assert.ok(Array.isArray(hit.suggestions), 'suggestions 必须是数组')
+      expectOut(tools, 'memory_read', hit)
+      // 按 path 读同一条，也必须合规
+      expectOut(tools, 'memory_read', await call('memory_read', { path: saved.path }))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('memory_read 未命中 → 仍给相近标题且合规', async () => {
+    const { lib, tools, call } = fresh()
+    try {
+      await call('memory_save', { title: '楼层限制器插件落地', content: '压缩相关。' })
+      const miss = await call('memory_read', { title: '楼层限制器插件落弟' })
+      assert.equal(miss.found, false, '近似但不精确的标题不算命中')
+      expectOut(tools, 'memory_read', miss)
+      const out = tools.get('memory_read').output.render({}, miss).map(b => b.text).join('\n')
+      assert.ok(out.includes('记忆不存在'), `渲染要报不存在：${out}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('全部工具的真实返回值都过 schema：save / search / read / update / link / forget / stats', async () => {
+    const { lib, tools, call } = fresh()
+    try {
+      const a = await call('memory_save', { title: '甲卡', content: '甲的内容，提到插件。', tags: ['x'], keywords: '甲,插件' })
+      expectOut(tools, 'memory_save', a)
+      expectOut(tools, 'memory_save', await call('memory_save', {
+        title: '乙卡', content: '乙的内容，提到插件。', links: ['甲卡'],
+      }))
+
+      expectOut(tools, 'memory_search', await call('memory_search', { query: '插件' }))
+      expectOut(tools, 'memory_search', await call('memory_search', { query: '*' }))
+      expectOut(tools, 'memory_read', await call('memory_read', { title: '甲卡' }))
+      expectOut(tools, 'memory_update', await call('memory_update', { title: '甲卡', importance: 4 }))
+      expectOut(tools, 'memory_link', await call('memory_link', { source: '甲卡', target: '乙卡', type: 'related' }))
+      expectOut(tools, 'memory_stats', await call('memory_stats', {}))
+      // 删除是两步走：不带 confirm 只预览
+      expectOut(tools, 'memory_forget', await call('memory_forget', { title: '乙卡' }))
+      assert.ok(fs.existsSync(a.path), '只预览，不该真删')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
