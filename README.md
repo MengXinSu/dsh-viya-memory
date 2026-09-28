@@ -2,42 +2,30 @@
 
 > **给 DeepSeek Harness 的本地长期记忆 —— 卡片就是 Markdown 文件，存在你自己的 Obsidian vault 里。**
 
-一个 DSH host 插件：单文件、零构建、零外部依赖（只用 DSH 自带的 `@deepseek-ai/schemastery`），
+![tests](https://img.shields.io/badge/tests-140%20passing-brightgreen) ![deps](https://img.shields.io/badge/deps-zero-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+
+一个 DSH host 插件：**单文件、零构建、零外部依赖**（只用 DSH 自带的 `@deepseek-ai/schemastery`），
 提供七个记忆工具，卡片以 **Markdown + YAML frontmatter + `[[]]` 双链** 落盘。
 
 ```
 save · search · read · update · link · forget · stats
 ```
 
-<!-- 英文摘要 / English -->
 <sub>**English:** A local long-term memory plugin for DeepSeek Harness. Cards are plain Markdown files in
-*your own* Obsidian vault — so the graph, backlinks, search and manual editing come for free.
+*your own* Obsidian vault — graph, backlinks, search and manual editing come for free.
 Seven model-facing tools, no database, no background process, no lock-in.</sub>
 
 ---
 
-## 为什么又造一个记忆插件
+## 亮点
 
-DSH 生态里记忆类插件不少（我逐个读过 23 款的源码，统计了 189 个工具注册点），三条结论：
-
-1. **事实标准骨架就是 `save / search / read / update / delete`** —— 和大家一样，没必要发明新范式；
-2. **只有 2/23 家把「证据门」做成工具，没有任何一家把「关系」做得比自带双链更好**；
-3. **自建的成本只有 ~700 行**，而装第三方插件要碰生产 profile。
-
-所以这个插件的定位很明确：**不做数据库，做文件。**
-
-## 设计上的几个取舍
-
-| 决定 | 为什么 |
-|---|---|
-| 卡片 = Markdown + frontmatter | 你随时能用 Obsidian 打开、手改、看图谱；不锁死在某个应用里。数据是你的。 |
-| 关系用 `[[]]` 双链 | 关系图是白送的，Obsidian 原生就认；`memory_link` 会往**两边**各写一条 |
-| 三层长度闸 | 软限 1000 字提示 / 硬限 4000 字**报错** / 检索返回总预算 2000 字符。写入侧不轻易拦信息，超限说明该写文件 |
-| 写卡时提炼 `keywords` | 「将来想不起该用什么词搜」是检索失败的头号原因，写卡时把同义词、缩写、中英对照埋进去 |
-| 图片搬进 `_assets/<卡片名>/` | 卡片目录保持干净，Obsidian 的全局图谱里不会混进一堆图片节点；正文里的引用**原地改写**，位置一个字不动 |
-| `memory_link` 要么两边都写、要么都不写 | 绝不留下「A 知道 B、B 不知道 A」的单向边 |
-| 写入前比对 mtime | 你在 Obsidian 手改过的卡，不会被插件用旧内容覆盖 |
-| 命中密钥特征就拒绝写入 | 库会同步（网盘 / 手机），明文密钥的泄露面比本地大 |
+- **数据是你的**：卡片就是 `.md` 文件，Obsidian 打开就能看、能改、能看图谱。不锁死在任何应用里。
+- **关系白送**：`memory_link` 往两张卡**各写一条** `[[双链]]`，要么两边都写、要么都不写，不留单向边。
+- **不怕误删**：删除是**两步**的——不带 `confirm: true` 只返回预览，一个字节都不动；默认软删进 `_trashed/`。
+- **不覆盖你的手改**：写入前比对 mtime，你在 Obsidian 里改过的卡不会被旧内容冲掉；你手写的 `aliases`、`cssclasses` 等字段逐字保留。
+- **不让密钥入库**：正文、标题、tags、keywords、关系说明命中密钥特征就拒绝写入（库常常会同步到网盘 / 手机）。
+- **关得住**：`save` / `update` / `link` / `forget` 只认库内，路径穿越、junction 绕路都会被拒。
+- **调用即走**：没有定时器、子进程、监听，不驻留后台；写入原子（临时文件 → rename）。1000 张卡时单次调用约 50–100ms。
 
 ## 安装
 
@@ -45,8 +33,8 @@ DSH 生态里记忆类插件不少（我逐个读过 23 款的源码，统计了
 dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 ```
 
-装完**必须**配置 `library`（见下一节），否则第一次调用会直接报错提醒你——这是刻意的，
-免得卡片被静默写进某个意外目录。
+装完**必须**配置 `library`，否则第一次调用会直接报错——这是刻意的，免得卡片被静默写进意外目录。
+host 插件改动后需**重启 DSH** 才生效。
 
 ## 配置
 
@@ -60,51 +48,60 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
     library: '/home/you/Obsidian/MyVault'      # Windows: 'D:\Obsidian\MyVault'
 ```
 
-其余可选项（都有合理默认值）：
-
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `userFile` | `<vault>/user.md` | 常驻 system prompt 的那份文件放哪 |
-| `softLimit` | `1000` | 正文软限（字），超了只在返回值里提示，不拦写入 |
-| `hardLimit` | `4000` | 正文硬限（字），超了报错并提示写文件或改用「卡 + 指针」 |
-| `searchBudget` | `2000` | 检索返回的总字符预算 |
+| `library` | （必填） | vault 绝对路径 |
+| `userFile` | `<vault>/user.md` | 常驻 system prompt 的那份文件 |
+| `softLimit` | `1000` | 正文软限（字），超了只提示、不拦 |
+| `hardLimit` | `4000` | 正文硬限（字），超了报错 |
+| `searchBudget` | `2000` | 检索结果总字符预算，超出的条目降级为截短摘要 |
 | `sensitiveScan` | `true` | 写入前扫描密钥特征 |
 
 ## 七个工具
 
 | 工具 | 参数（**加粗**必填） | 行为 |
 |---|---|---|
-| `memory_save` | **`title`** · **`content`** · `kind` · `tags` · `keywords` · `importance` · `links` · `severity` · `occurred_at` | 拼 frontmatter、按 kind 选目录、slug 文件名、原子写、搬运正文里的本地图片 |
-| `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 标签 + 摘要；`query` 用空格或 `\|` 分关键词（AND），`*` 通配 |
-| `memory_read` | **`title`** 或 **`path`** | 正文全文 + `status`/`updated`/`links` + 附件绝对路径（不自动读图，图片 token 贵）；找不到时附最多 3 个相近标题 |
+| `memory_save` | **`title`** · **`content`** · `kind` · `tags` · `keywords` · `importance` · `links` · `severity` · `occurred_at` | 新建一张卡；同名卡已存在时，内容高度重合就跳过，否则另起 `## 更新 YYYY-MM-DD` 一节追加。正文里的本地图片搬进 `_assets/` 并原地改写引用 |
+| `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 标签 + 摘要。空格或 `\|` 分关键词（AND），`*` 通配，只传 `*` 返回全部；默认 10 条、无上限 |
+| `memory_read` | **`title`** 或 **`path`** | 全文 + `status` / `updated` / `links` + 附件绝对路径；找不到时附最多 3 个相近标题 |
 | `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` · `occurred_at` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
-| `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条 `[[]]`；两边都找得到才写 |
-| `memory_forget` | **`title`** · `confirm` · `permanent` | **两步删**：不传 `confirm` 只返回预览（删哪张、谁引用了它、一个字节都不动）；`confirm: true` 才软删进 `_trashed/`；`permanent: true` 真删（同样要 confirm） |
-| `memory_stats` | 无 | 只读体检：总卡数 / 分布 / 超长卡 / **死链** / 回收站 |
+| `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条关系边（`related` / `causes` / `explains` / `part_of` / `contradicts`） |
+| `memory_forget` | **`title`** · `confirm` · `permanent` | 两步删：先预览（删哪张、谁引用了它），`confirm: true` 才软删；`permanent: true` 真删，同样要确认 |
+| `memory_stats` | 无 | 只读体检：卡数 / 分布 / 超长卡 / 死链 / 库外链接 / 重名卡 / 回收站 |
 
-**撞名的处理是三岔口**，不是二选一：同名卡不存在就新建；已存在且新内容与旧内容高度重合（bigram 重叠 > 0.6）
-就**跳过不写**（防止把同一件事记两遍）；真的在补充就**另起一节** `## 更新 YYYY-MM-DD`。
+## `user.md`：唯一常驻 prompt 的东西
 
-## `user.md`：唯一常驻进 system prompt 的东西
-
-`<你的 vault>/user.md` 会被注入到 system prompt 的**末尾**（order 排在环境后缀之后）——这是整个插件唯一
-常驻上下文的部分，所以只放**低频变化**的东西：称呼、禁忌、你的偏好。
-
-它由**你手写**，插件不提供写入工具（模型不该有权改你的规矩）。改完下一轮对话就生效，不用重启。
+`<vault>/user.md` 会被注入 system prompt 末尾——这是插件唯一常驻上下文的部分，只放**低频变化**的东西：
+称呼、禁忌、偏好。它由**你手写**，插件不提供写入工具（模型不该有权改你的规矩）。改完下一轮对话生效。
 
 ## 目录结构
 
 ```
 <你的 vault>/
-├── user.md              # 常驻 prompt 的那份（你手写）
-├── 03-Knowledge/        # 默认目录
+├── user.md              # 常驻 prompt（你手写）
+├── 03-Knowledge/        # 默认目录（可建子文件夹，最深 8 层）
 ├── 02-Projects/ 04-Content/ 05-Prompts/ 06-Business/ 07-Tools/ 08-Mistakes/
 ├── _assets/<卡片名>/     # 卡片引用的图片
-└── _trashed/            # 软删的卡（想恢复就手动拖回去）
+└── _trashed/            # 软删的卡（恢复 = 拖回原目录）
 ```
 
-`kind` 参数走三道闸匹配目录（精确 → 归一化 → 互为子串），都不中才新建 `NN-slug` 一级目录，
-并在返回里报备「已新建目录 `09-xxx`」。
+`kind` 走三道闸匹配目录（精确 → 归一化 → 互为子串），都不中才新建 `NN-slug` 一级目录并在返回里报备。
+`_` / `.` 前缀目录（`_trashed`、`_assets`、`.git`、`.obsidian`）是保留区，不算卡目录。
+
+<details>
+<summary><b>行为细则</b>（几个不写下来一定会踩的地方）</summary>
+
+- **标签与关键词**：`tags: [a, b]` 与标量 `tags: a` 都认；值里可带逗号（序列化自动加引号）、换行会压成空格。关键词中英文逗号都算分隔。
+- **frontmatter 兼容**：认行尾注释 `# …`、块标量 `|` / `>`、CRLF、BOM；`status` 大小写不敏感。
+- **文件名只是存储**：Windows 非法字符（`* : ? / \ " < > |`）转成全角同形字，文件名可读；按字节截断到 150；撞名自动让位成 `名-2.md`。判重看标题，不看文件名。
+- **路径口径**：相对路径以**库根**为基准（与 Obsidian 一致）。`memory_read` 可读库外文件（看附件用）；其余工具只认库内。路径形式的 `title` 只能写进卡目录或其子目录。
+- **回收站**：`save` / `update` / `link` 看不见回收站里的卡；往已标 `deleted` 的同名卡追加会报错，要先改回 `approved` 或换标题。
+- **边的来源**：frontmatter `links` 是声明过的边；正文里的 `[[X]]` 是派生边，不写回 frontmatter（正文删掉就没了）；`![[嵌入]]` 不算边；同目标同类型只留一条。换 `type` 会把 `weight` / `description` 重置为默认值，除非同一次调用里显式给出。
+- **删除预览的引用数**按 Obsidian 口径：标题、文件名、目录前缀、锚点 / 别名都认，大小写不敏感。
+- **图片**：只搬明确的图片扩展名；代码块和行内代码里的图片语法不算图片；同名不同内容的图另起名字，不覆盖。
+- **追加更新**：`kind` 跟着卡的实际目录走；传了 `occurred_at` 就采用，不传保留原值。
+
+</details>
 
 ## 测试
 
@@ -112,54 +109,18 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 node --test tests/selftest.mjs
 ```
 
-**140 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
-与文件名撞车、kind 三道闸、三层长度闸、bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组
-与权重、七个工具的完整行为（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链 /
-路径夹取 / **删除的 confirm 硬闸**）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
+**140 项，全部走真实执行路径**（mock 一个 ctx 调 `apply()`，捕获实际注册的工具再真的调用）：frontmatter 往返、
+slug 与撞名、kind 三道闸、长度闸、敏感扫描、图片搬运、检索与预算降级、七个工具的完整行为、路径夹取与
+junction、删除硬闸、`user.md` 注入，以及真文件系统端到端冒烟。
 
-其中相当一部分是**被测出来的 bug 反向补的回归用例**——标量标签、值里带换行、超长标题撞文件名、
-相对路径越出库根、换关系类型继承旧权重，都在这一栏里。
-
-## 行为细则（几个不写下来一定会踩的地方）
-
-- **标签与关键词**：`tags: [a, b]` 是正路；`a, b` 这种标量写法也认。**值里可以带逗号**——序列化时会
-  自动加引号（`['标签1,标签2']` 是一个标签，不是两个）。同理，值里的换行会被压成空格，不会把
-  frontmatter 写成两行。
-- **文件名只是存储**：标题 → 文件名时，Windows 非法字符（`* : ? / \ " < > |`）转成全角同形字（`＊ ： ？`…），文件名保持可读；映射按**字节**截断（150 字节上限）。两个长标题即使截断后同名，
-  也不会互相顶掉或误判「内容重合」——撞车时后者自动让位成 `名-2.md`。判重只看「同一张卡」，不看文件名。
-- **路径口径**：卡内引用的相对路径、以及 `memory_read` 的相对路径，都以**库根**为基准（和 Obsidian
-  一致），不看进程 cwd。`.md` 以外、又带非图片后缀的路径不会被当图片搬走。绝对路径照常可用。
-- **能力边界**：`memory_read` 可以读**库外**文件（你要看附件绝对路径时会用到）；但
-  `memory_forget` / `memory_save` / `memory_update` / `memory_link` 一律只认库内——删除和改写不会
-  被一条参数带到库外去。
-- **关系边**：目标 + 类型相同即视为「已有这条边」，再次调用跳过；**换 `type` 会把 `weight`/`description`
-  重置成新类型的默认值（0.7 / 空）**，除非你在同一次调用里显式给出——旧关系的权重不该跟着新关系跑。
-  缺省或空的 `weight`/`description` 则视为「没说」，不会覆盖已有边的值。
-- **删卡是两步的**：`memory_forget` 不带 `confirm` 只返回**预览**（目标路径 + 有多少张卡引用了它），
-  **一个字节都不动**；带 `confirm: true` 才真删。这不是啰嗦，是**防误删的硬闸**——规矩写在提示词里
-  约束不住执行者（会读、会引用、仍然照删），只有参数级的闸门绕不过去。`permanent: true` 同样要确认。
-- **软删是「搬到 `_trashed/`」，不是隐藏**。`_trashed/` 在库里面，Obsidian 照样看得见那些卡，
-  `[[双链]]` 也不会断（指向的文件只是换了目录）。想恢复：把文件拖回原目录，或把 `status` 改回 `approved`。
-- **回收站与保留目录隔离**：`_` / `.` 前缀目录（`_trashed`、`_assets`、`.git`、`.obsidian`）不是 kind，
-  `kind: "trash"` 不会把卡写进回收站；`save` / `update` / `link` 看不见回收站里的卡（`read` 与永久删除除外）；
-  往一张已标 `deleted` 的同名卡追加会报错，要先改回 `approved` 或换标题。
-- **`memory_save` 的路径标题**只能落在库内**卡目录或其子目录**（`03-Knowledge/x.md`、`03-Knowledge/子/x.md`），库外、库根、任一段为 `_`/`.` 保留目录一律拒绝。卡目录下的子文件夹会被递归扫描（最深 8 层，不跟随 junction/符号链接），kind 记一级卡目录。
-- **你手写的 frontmatter 字段**（`aliases`、`cssclasses`、插件字段……）任何写入都逐字保留。
-- **边的来源**：frontmatter `links` 是声明过的边；正文里的 `[[X]]` 是派生边，只从正文读、不写回
-  frontmatter（正文删掉就没了）；`![[嵌入]]` 不算关系边；同目标同类型的边只留一条。
-- **删除预览的引用数**按 Obsidian 口径数：标题、文件名、目录前缀、锚点/别名都认，大小写不敏感。
-- **关键词**中英文逗号都算分隔符；追加更新时 `kind` 跟着卡的实际目录走。
+大部分用例是**被测出来的 bug 反向补的回归**；关键修复都做过变异验证（故意改坏 → 确认测试报警 → 恢复比对哈希）。
 
 ## 踩过的两个坑
 
-1. **cordis 的服务访问必须先声明 `inject`。** `apply()` 里用了 `ctx.systemPrompt` 却没写进 `inject`，
-   结果是插件**整条不激活**——不报错、不崩溃，只是七个工具一个都没注册。当时自测 61/61 全绿也抓不到，
-   因为 mock 的 `ctx` 是个普通对象，谁访问它都不拦。
-2. **schemastery 的 `.volatile()` 字段是盒子对象。** 解析后的值不是字符串而是 `{ get() }`，
-   于是 `String(库路径)` 得到 `"[object Object]"`，卡片全写进了一个叫 `[object Object]` 的目录。
-   更阴的是另外五个配置项：字数硬限、检索预算全变成 NaN 比较，**永远返回 false**——不报错，只是不生效。
+1. **cordis 的服务访问必须先声明 `inject`。** `apply()` 用了 `ctx.systemPrompt` 却没写进 `inject`，插件**整条不激活**——不报错，只是一个工具都没注册。mock 的 `ctx` 是普通对象，自测全绿也抓不到。
+2. **schemastery 的 `.volatile()` 字段是盒子对象。** 解析后是 `{ get() }` 而不是值：`String(库路径)` 得到 `"[object Object]"`，数字阈值全变 NaN 比较、静默失效。
 
-两条都补成了防复发自测（静态扫描 `ctx.xxx` 与 `inject` 声明比对；拿真 schema 解析一次验类型）。
+两条都补成了防复发自测。
 
 ## 碎碎念
 
