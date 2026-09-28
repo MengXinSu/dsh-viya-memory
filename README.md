@@ -171,10 +171,6 @@ node --test tests/selftest.mjs
 
 感谢 **Ww** 为本项目的开发与测试提供了模型支持。
 
-## 致谢
-
-感谢 **Ww** 为本项目的开发与测试提供了模型支持。
-
 ## License
 
 MIT
