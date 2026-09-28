@@ -1719,3 +1719,85 @@ describe('审查修复④：save 只写库内一级卡目录', () => {
     }
   })
 })
+// 2026-09-28 审查复现 B2 / B3 / B4：边的来源分开——frontmatter 声明的边写回，正文派生的边不冻结；嵌入不是边。
+describe('审查修复⑤：边的来源分开', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+  const fmOf = file => fs.readFileSync(file, 'utf8').split('\n---\n')[0]
+
+  it('save 追加时重复传同一个 links → frontmatter 只留一条（B2）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '目标', content: '目标卡内容，独立。' })
+      const r = await call('memory_save', { title: 'L卡', content: '第一版内容甲乙丙丁。', links: ['目标'] })
+      await call('memory_save', { title: 'L卡', content: '另一段补充子丑寅卯。', links: ['目标'] })
+      const n = (fmOf(r.path).match(/target: 目标/g) || []).length
+      assert.equal(n, 1, `同一条边只能写一次，实际 ${n} 条`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('读到历史重复边 → 解析去重，下次写回自愈（B2）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const r = await call('memory_save', { title: '脏卡', content: '历史脏数据，独立内容。' })
+      const edge = '  - {target: 某卡, type: related, weight: 0.7, description: \'\'}'
+      const t = fs.readFileSync(r.path, 'utf8').replace('links: []', `links:\n${edge}\n${edge}`)
+      fs.writeFileSync(r.path, t, 'utf8')
+      assert.equal(I.parseCard(t, r.path).links.length, 1, '解析时就该去重')
+      await call('memory_update', { title: '脏卡', importance: 4 })
+      const n = (fmOf(r.path).match(/target: 某卡/g) || []).length
+      assert.equal(n, 1, `写回后只剩一条，实际 ${n}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('正文里的 [[X]] 不冻结进 frontmatter：正文删掉，边就没了（B3）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: 'X', content: 'x 内容，独立。' })
+      const r = await call('memory_save', { title: 'P卡', content: '正文提到 [[X]] 一次。' })
+      assert.ok(!fmOf(r.path).includes('target: X'), '正文派生的边不该写进 frontmatter')
+      assert.deepEqual((await call('memory_read', { title: 'P卡' })).links, ['X'], '读的时候仍然算一条边')
+      await call('memory_update', { title: 'P卡', content: '改写后的正文，已经不再提那张卡。' })
+      await call('memory_update', { title: 'P卡', importance: 2 })
+      const read = await call('memory_read', { title: 'P卡' })
+      assert.deepEqual(read.links, [], `正文删掉链接后边必须消失，实际 ${JSON.stringify(read.links)}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('memory_link 建的边照样写进 frontmatter（声明边不受影响）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const a = await call('memory_save', { title: '甲', content: '甲卡正文，独立。' })
+      const b = await call('memory_save', { title: '乙', content: '乙卡正文，独立。' })
+      await call('memory_link', { source: '甲', target: '乙', type: 'explains', weight: 0.9 })
+      assert.ok(fmOf(a.path).includes('target: 乙, type: explains, weight: 0.9'), fmOf(a.path))
+      assert.ok(fmOf(b.path).includes('target: 甲, type: explains, weight: 0.9'), fmOf(b.path))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('![[嵌入]] 不是关系边，体检不报死链（B4）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '图卡', content: '看图 ![[_assets/图卡/a.png]] 和 [[不存在的卡]]。' })
+      const read = await call('memory_read', { title: '图卡' })
+      assert.deepEqual(read.links, ['不存在的卡'], `嵌入不该算边，实际 ${JSON.stringify(read.links)}`)
+      const st = await call('memory_stats', {})
+      assert.equal(st.deadLinks.length, 1, `只有真死链一条，实际 ${JSON.stringify(st.deadLinks)}`)
+      assert.ok(!st.deadLinks.some(d => d.includes('.png')), '图片不能被报成死链')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
