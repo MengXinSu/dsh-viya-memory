@@ -2145,3 +2145,24 @@ describe('子目录支持', () => {
     }
   })
 })
+
+// 2026-09-28 交接遗留：memory_save 追加路径忽略 occurred_at
+describe('追加时的 occurred_at', () => {
+  it('追加显式给 occurred_at → 采用；不给 → 保留原值', async () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    try {
+      const r = await call('memory_save', { title: '时间卡', content: '第一版内容甲乙丙丁。', occurred_at: '2026-09-01' })
+      await call('memory_save', { title: '时间卡', content: '完全不同的补充子丑寅卯。' })
+      assert.equal(I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path).occurred_at, '2026-09-01', '不给就保留原值')
+      await call('memory_save', { title: '时间卡', content: '又一段全新的补充戊己庚辛。', occurred_at: '2026-09-15' })
+      assert.equal(I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path).occurred_at, '2026-09-15', '显式给了就采用')
+      const hit = await call('memory_search', { query: '时间卡', start_time: '2026-09-10', end_time: '2026-09-20' })
+      assert.equal(hit.total, 1, `时间检索要按新值过滤，实际 ${hit.total}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
