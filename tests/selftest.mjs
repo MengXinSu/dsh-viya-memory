@@ -2200,3 +2200,34 @@ describe('手写 YAML 边界', () => {
     }
   })
 })
+
+// 2026-09-28 边界探测：不同目录手建同标题卡，read 只命中一张，体检必须报出来
+describe('体检报重名卡', () => {
+  it('跨目录同标题（忽略大小写）→ duplicates 一组；已删与不同标题不算', async () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    const put = (dir, file, title, extra = '') => {
+      fs.mkdirSync(path.join(lib.dir, dir), { recursive: true })
+      fs.writeFileSync(path.join(lib.dir, dir, file), `---\ntitle: ${title}\n${extra}---\n\n${title} 正文。\n`, 'utf8')
+    }
+    try {
+      put('03-Knowledge', 'a.md', '同名卡')
+      put('08-Mistakes', 'b.md', '同名卡')
+      put('02-Projects', 'c.md', '同名卡', 'status: deleted\n')
+      put('02-Projects', 'd.md', 'Case卡')
+      put('08-Mistakes', 'e.md', 'case卡')
+      put('03-Knowledge', 'f.md', '独一张')
+      const r = await call('memory_stats', {})
+      assert.equal(r.duplicates.length, 2, `应为 2 组（同名卡 / case卡），实际 ${JSON.stringify(r.duplicates)}`)
+      const g = r.duplicates.find(d => d.includes('同名卡'))
+      assert.ok(g && g.includes('03-Knowledge') && g.includes('08-Mistakes') && !g.includes('02-Projects'), `要列出两处位置且不含已删：${g}`)
+      assert.ok(!r.duplicates.some(d => d.includes('独一张')))
+      const out = made.tools.get('memory_stats').output.render({}, r).map(b => b.text).join('\n')
+      assert.ok(out.includes('重名卡：2 组'), `渲染要报重名：${out}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
