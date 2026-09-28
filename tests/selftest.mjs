@@ -1801,3 +1801,58 @@ describe('审查修复⑤：边的来源分开', () => {
     }
   })
 })
+
+// 2026-09-28 审查复现 B1 / B9 / B11：元数据小修。
+describe('审查修复⑥：kind 跟随实际目录 / 块式列表剥引号 / 中文逗号关键词', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  it('追加更新不传 kind → frontmatter kind 仍是卡实际所在目录（B1）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const r = await call('memory_save', { title: 'K卡', content: '教训一：第一次写入的完整内容甲乙丙', kind: 'mistakes' })
+      const again = await call('memory_save', { title: 'K卡', content: '完全不同的补充说明子丑寅卯辰巳' })
+      assert.ok(again.action.startsWith('追加'), `应走追加，实际 ${again.action}`)
+      const raw = fs.readFileSync(r.path, 'utf8')
+      assert.ok(raw.includes('kind: 08-Mistakes'), `kind 必须仍是 08-Mistakes，实际：\n${raw.split('\n---\n')[0]}`)
+      assert.ok(!raw.includes('kind: 03-Knowledge'), 'kind 不能被缺省值改写')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('块式列表项的引号被剥掉（B9）', () => {
+    const card = I.parseCard("---\ntitle: T\ntags:\n  - '技术'\n  - \"DSH\"\n  - 裸写\nkeywords:\n  - 'a, b'\n---\nbody", 'x/03-Knowledge/T.md')
+    assert.deepEqual(card.tags, ['技术', 'DSH', '裸写'])
+    assert.deepEqual(card.keywords, ['a, b'], '引号里的逗号是内容，不是分隔符')
+  })
+
+  it('块式 links 仍能解析（剥引号不误伤 {…} 对象）', () => {
+    const card = I.parseCard("---\ntitle: T\nlinks:\n  - {target: X, type: explains, weight: 0.8, description: '说明, 带逗号'}\n  - 'Y'\n---\nbody", 'x/03-Knowledge/T.md')
+    const byTarget = Object.fromEntries(card.links.map(l => [l.target, l]))
+    assert.equal(byTarget.X?.type, 'explains')
+    assert.equal(byTarget.X?.description, '说明, 带逗号')
+    assert.ok(byTarget.Y, `引号包住的标量目标要能认出，实际 ${JSON.stringify(card.links)}`)
+  })
+
+  it('keywords 中英文逗号都分隔（B11，save 与 update 两扇门）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const r = await call('memory_save', { title: 'KW卡', content: '内容，独立。', keywords: '记忆，插件,Obsidian' })
+      let card = I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path)
+      assert.deepEqual(card.keywords, ['记忆', '插件', 'Obsidian'])
+      await call('memory_update', { title: 'KW卡', keywords: '甲，乙' })
+      card = I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path)
+      assert.deepEqual(card.keywords, ['甲', '乙'])
+      await call('memory_save', { title: 'KW卡', content: '完全不同的追加内容子丑寅卯。', keywords: '丙，丁' })
+      card = I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path)
+      assert.deepEqual(card.keywords, ['甲', '乙', '丙', '丁'])
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
