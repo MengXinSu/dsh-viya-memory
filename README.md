@@ -112,7 +112,7 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 node --test tests/selftest.mjs
 ```
 
-**77 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
+**123 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
 与文件名撞车、kind 三道闸、三层长度闸、bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组
 与权重、七个工具的完整行为（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链 /
 路径夹取 / **删除的 confirm 硬闸**）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
@@ -140,6 +140,15 @@ node --test tests/selftest.mjs
   约束不住执行者（会读、会引用、仍然照删），只有参数级的闸门绕不过去。`permanent: true` 同样要确认。
 - **软删是「搬到 `_trashed/`」，不是隐藏**。`_trashed/` 在库里面，Obsidian 照样看得见那些卡，
   `[[双链]]` 也不会断（指向的文件只是换了目录）。想恢复：把文件拖回原目录，或把 `status` 改回 `approved`。
+- **回收站与保留目录隔离**：`_` / `.` 前缀目录（`_trashed`、`_assets`、`.git`、`.obsidian`）不是 kind，
+  `kind: "trash"` 不会把卡写进回收站；`save` / `update` / `link` 看不见回收站里的卡（`read` 与永久删除除外）；
+  往一张已标 `deleted` 的同名卡追加会报错，要先改回 `approved` 或换标题。
+- **`memory_save` 的路径标题**只能落在库内**一级卡目录**（`03-Knowledge/x.md`），库外、库根、子目录、保留目录一律拒绝。
+- **你手写的 frontmatter 字段**（`aliases`、`cssclasses`、插件字段……）任何写入都逐字保留。
+- **边的来源**：frontmatter `links` 是声明过的边；正文里的 `[[X]]` 是派生边，只从正文读、不写回
+  frontmatter（正文删掉就没了）；`![[嵌入]]` 不算关系边；同目标同类型的边只留一条。
+- **删除预览的引用数**按 Obsidian 口径数：标题、文件名、目录前缀、锚点/别名都认，大小写不敏感。
+- **关键词**中英文逗号都算分隔符；追加更新时 `kind` 跟着卡的实际目录走。
 
 ## 踩过的两个坑
 
@@ -150,7 +159,7 @@ node --test tests/selftest.mjs
    于是 `String(库路径)` 得到 `"[object Object]"`，卡片全写进了一个叫 `[object Object]` 的目录。
    更阴的是另外五个配置项：字数硬限、检索预算全变成 NaN 比较，**永远返回 false**——不报错，只是不生效。
 
-两条都补成了防复发自测（静态扫描 `ctx.xxx` 与 `inject` 声明比对；拿真 schema 解析一次验类型），现在 75 项全绿。
+两条都补成了防复发自测（静态扫描 `ctx.xxx` 与 `inject` 声明比对；拿真 schema 解析一次验类型）。
 
 ## 碎碎念
 

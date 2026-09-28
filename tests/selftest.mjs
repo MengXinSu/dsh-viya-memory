@@ -814,17 +814,22 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(I.isLocalImagePath('a.verylongext'), false, '长后缀不该漏网')
     assert.equal(I.isLocalImagePath('图.1'), true, '点+数字不是扩展名，照旧当本地路径')
     assert.equal(I.isLocalImagePath('https://x/a.png'), false)
+    // 原先建完从不删：每跑一轮自测在系统临时目录里漏一个空库（2026-09-28 查出 1400+ 个）
     const dir = tempLibrary().dir
-    assert.equal(
-      I.resolveImagePath('./attachments/a.png', dir),
-      path.join(dir, 'attachments/a.png'),
-      '带目录的相对路径必须以库根为基准',
-    )
-    assert.equal(
-      I.resolveImagePath('a.png', dir),
-      path.join(dir, 'a.png'),
-      '裸文件名也要以库根为基准（不能再跟进程 cwd 跑）',
-    )
+    try {
+      assert.equal(
+        I.resolveImagePath('./attachments/a.png', dir),
+        path.join(dir, 'attachments/a.png'),
+        '带目录的相对路径必须以库根为基准',
+      )
+      assert.equal(
+        I.resolveImagePath('a.png', dir),
+        path.join(dir, 'a.png'),
+        '裸文件名也要以库根为基准（不能再跟进程 cwd 跑）',
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   // 2026-09-27：给 findCard 加库根回落时不能连库外一起放进来——
