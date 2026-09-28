@@ -1583,3 +1583,56 @@ describe('审查修复①：回收站与保留目录隔离', () => {
     }
   })
 })
+
+// 2026-09-28 审查复现 B8：用户/Obsidian 插件写的未知 frontmatter 字段，任何写入都不能抹掉。
+describe('审查修复②：未知 frontmatter 字段原样保留', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+  // 行内 + 块式 + 嵌套缩进三种写法都要活下来
+  const EXTRA = 'aliases: [别名一, 别名二]\ncssclasses:\n  - wide\n  - no-title\nplugin_cfg:\n  nested: 1\n  deep: "x: y"'
+  const inject = (file) => {
+    const t = fs.readFileSync(file, 'utf8')
+    fs.writeFileSync(file, t.replace(/\n---\n/, `\n${EXTRA}\n---\n`), 'utf8')
+  }
+  const assertExtra = (file, when) => {
+    const t = fs.readFileSync(file, 'utf8')
+    const fm = t.split('\n---\n')[0]
+    assert.ok(fm.includes(EXTRA), `${when} 后未知字段必须逐字保留，实际 frontmatter：\n${fm}`)
+    assert.equal(fm.split('aliases:').length - 1, 1, `${when} 后 aliases 不能重复出现`)
+  }
+
+  it('update / save 追加 / link / forget 之后都保留（逐字、不重复）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const a = await call('memory_save', { title: '字段卡', content: '甲乙丙丁的原始内容。' })
+      await call('memory_save', { title: '另一张', content: '子丑寅卯，独立内容。' })
+      inject(a.path)
+
+      await call('memory_update', { title: '字段卡', importance: 4 })
+      assertExtra(a.path, 'update')
+      await call('memory_save', { title: '字段卡', content: '完全不同的补充：戊己庚辛壬癸。' })
+      assertExtra(a.path, 'save 追加')
+      await call('memory_link', { source: '字段卡', target: '另一张', type: 'explains' })
+      assertExtra(a.path, 'link')
+      const gone = await call('memory_forget', { title: '字段卡', confirm: true })
+      assertExtra(gone.path, 'forget')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('已知字段不会被当成未知字段重复写出', () => {
+    const src = '---\ntitle: T\ntags:\n  - a\nlinks:\n  - {target: X, type: related, weight: 0.7, description: \'\'}\naliases: [q]\n---\n\nbody'
+    const card = I.parseCard(src, 'x/03-Knowledge/T.md')
+    assert.deepEqual(card.extraFrontmatter, ['aliases: [q]'])
+    const out = I.serializeCard(card)
+    assert.equal(out.split('tags:').length - 1, 1, 'tags 只能出现一次')
+    assert.equal(out.split('links:').length - 1, 1, 'links 只能出现一次')
+    // 往返稳定：再解析一次，未知字段不变
+    assert.deepEqual(I.parseCard(out, 'x/03-Knowledge/T.md').extraFrontmatter, ['aliases: [q]'])
+  })
+})
