@@ -2,7 +2,7 @@
 
 > **给 DeepSeek Harness 的本地长期记忆 —— 卡片就是 Markdown 文件，存在你自己的 Obsidian vault 里。**
 
-![tests](https://img.shields.io/badge/tests-140%20passing-brightgreen) ![deps](https://img.shields.io/badge/deps-zero-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![tests](https://img.shields.io/badge/tests-143%20passing-brightgreen) ![deps](https://img.shields.io/badge/deps-zero-blue) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 一个 DSH host 插件：**单文件、零构建、零外部依赖**（只用 DSH 自带的 `@deepseek-ai/schemastery`），
 提供七个记忆工具，卡片以 **Markdown + YAML frontmatter + `[[]]` 双链** 落盘。
@@ -25,7 +25,7 @@ Seven model-facing tools, no database, no background process, no lock-in.</sub>
 - **不覆盖你的手改**：写入前比对 mtime，你在 Obsidian 里改过的卡不会被旧内容冲掉；你手写的 `aliases`、`cssclasses` 等字段逐字保留。
 - **不让密钥入库**：正文、标题、tags、keywords、关系说明命中密钥特征就拒绝写入（库常常会同步到网盘 / 手机）。
 - **关得住**：`save` / `update` / `link` / `forget` 只认库内，路径穿越、junction 绕路都会被拒。
-- **调用即走**：没有定时器、子进程、监听，不驻留后台；写入原子（临时文件 → rename）。1000 张卡时单次调用约 50–100ms。
+- **调用即走**：没有定时器、子进程、监听，不驻留后台；写入原子（临时文件 → rename）。1000 张卡规模下实测单次调用约 50–100ms（本机自测，非基准测试）。
 
 ## 安装
 
@@ -51,7 +51,7 @@ host 插件改动后需**重启 DSH** 才生效。
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `library` | （必填） | vault 绝对路径 |
-| `userFile` | `<vault>/user.md` | 常驻 system prompt 的那份文件 |
+| `userFile` | 空（回落 `<vault>/user.md`） | 常驻 system prompt 的那份文件 |
 | `softLimit` | `1000` | 正文软限（字），超了只提示、不拦 |
 | `hardLimit` | `4000` | 正文硬限（字），超了报错 |
 | `searchBudget` | `2000` | 检索结果总字符预算，超出的条目降级为截短摘要 |
@@ -63,16 +63,16 @@ host 插件改动后需**重启 DSH** 才生效。
 |---|---|---|
 | `memory_save` | **`title`** · **`content`** · `kind` · `tags` · `keywords` · `importance` · `links` · `severity` · `occurred_at` | 新建一张卡；同名卡已存在时，内容高度重合就跳过，否则另起 `## 更新 YYYY-MM-DD` 一节追加。正文里的本地图片搬进 `_assets/` 并原地改写引用 |
 | `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 标签 + 摘要。空格或 `\|` 分关键词（AND），`*` 通配，只传 `*` 返回全部；默认 10 条、无上限 |
-| `memory_read` | **`title`** 或 **`path`** | 全文 + `status` / `updated` / `links` + 附件绝对路径；找不到时附最多 3 个相近标题 |
+| `memory_read` | `title` / `path`（二选一） | 全文 + `status` / `updated` / `links` + 附件绝对路径；找不到时附最多 3 个相近标题 |
 | `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` · `occurred_at` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
 | `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条关系边（`related` / `causes` / `explains` / `part_of` / `contradicts`） |
 | `memory_forget` | **`title`** · `confirm` · `permanent` | 两步删：先预览（删哪张、谁引用了它），`confirm: true` 才软删；`permanent: true` 真删，同样要确认 |
-| `memory_stats` | 无 | 只读体检：卡数 / 分布 / 超长卡 / 死链 / 库外链接 / 重名卡 / 回收站 |
+| `memory_stats` | （无） | 只读体检：卡数 / 分布 / 超长卡 / 死链 / 库外链接 / 重名卡 / 回收站 |
 
 ## `user.md`：唯一常驻 prompt 的东西
 
 `<vault>/user.md` 会被注入 system prompt 末尾——这是插件唯一常驻上下文的部分，只放**低频变化**的东西：
-称呼、禁忌、偏好。它由**你手写**，插件不提供写入工具（模型不该有权改你的规矩）。改完下一轮对话生效。
+称呼、禁忌、偏好。它由**你手写**，插件不提供写入工具（模型不该有权改你的规矩）。改完**下一次请求即生效**——每次组装 system prompt 都现读该文件，不缓存。
 
 ## 目录结构
 
@@ -109,7 +109,7 @@ host 插件改动后需**重启 DSH** 才生效。
 node --test tests/selftest.mjs
 ```
 
-**140 项，全部走真实执行路径**（mock 一个 ctx 调 `apply()`，捕获实际注册的工具再真的调用）：frontmatter 往返、
+**143 项，全部走真实执行路径**（mock 一个 ctx 调 `apply()`，捕获实际注册的工具再真的调用）：frontmatter 往返、
 slug 与撞名、kind 三道闸、长度闸、敏感扫描、图片搬运、检索与预算降级、七个工具的完整行为、路径夹取与
 junction、删除硬闸、`user.md` 注入，以及真文件系统端到端冒烟。
 
