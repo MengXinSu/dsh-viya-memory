@@ -1467,3 +1467,119 @@ describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
     fs.rmSync(file, { force: true })
   })
 })
+
+// 2026-09-28 审查复现：回收站与保留目录必须和卡目录隔离（B5 / B7 / B12）。
+// 每条用独立最小库，避免共享库里的其它卡让断言碰巧成立。
+describe('审查修复①：回收站与保留目录隔离', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  it('kind 模糊匹配不会命中 _trashed / _assets（B5）', async () => {
+    const { lib, call } = fresh()
+    try {
+      fs.mkdirSync(path.join(lib.dir, '_trashed'), { recursive: true })
+      fs.mkdirSync(path.join(lib.dir, '_assets'), { recursive: true })
+      const r1 = await call('memory_save', { title: '垃圾卡', content: '内容一，独立。', kind: 'trash' })
+      const r2 = await call('memory_save', { title: '资产卡', content: '内容二，独立。', kind: 'assets' })
+      const head = p => path.relative(lib.dir, p).split(/[\\/]/)[0]
+      assert.ok(!head(r1.path).startsWith('_'), `不能写进保留目录，实际 ${r1.path}`)
+      assert.ok(!head(r2.path).startsWith('_'), `不能写进保留目录，实际 ${r2.path}`)
+      assert.equal((await call('memory_search', { query: '垃圾卡' })).total, 1, '写进去的卡必须搜得到')
+      assert.equal((await call('memory_search', { query: '资产卡' })).total, 1, '写进去的卡必须搜得到')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('ensureDirs 的 kind 候选不含 _ / . 前缀目录', () => {
+    const lib = tempLibrary()
+    try {
+      for (const d of ['_trashed', '_assets', '.git', '.obsidian', '09-Custom']) {
+        fs.mkdirSync(path.join(lib.dir, d), { recursive: true })
+      }
+      const { kinds } = I.ensureDirs(lib.config)
+      for (const d of ['_trashed', '_assets', '.git', '.obsidian']) assert.ok(!kinds.has(d), `${d} 不该是 kind`)
+      assert.ok(kinds.has('09-Custom'), '普通自建目录仍是 kind')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('save 撞上 status: deleted 的同名卡 → 报错，不往黑洞里追加（B7）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const r = await call('memory_save', { title: 'D卡', content: '原始内容甲乙丙丁戊。' })
+      await call('memory_update', { title: 'D卡', status: 'deleted' })
+      const before = fs.readFileSync(r.path, 'utf8')
+      await assert.rejects(
+        () => call('memory_save', { title: 'D卡', content: '新的重要结论子丑寅卯辰。' }),
+        /deleted/,
+      )
+      assert.equal(fs.readFileSync(r.path, 'utf8'), before, '被拒时盘上一字不动')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('save 与回收站里的卡同名 → 在正常目录新建，不碰回收站那份（B7）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: 'T卡', content: '旧版内容甲乙丙。' })
+      const gone = await call('memory_forget', { title: 'T卡', confirm: true })
+      const trashedBefore = fs.readFileSync(gone.path, 'utf8')
+      const r = await call('memory_save', { title: 'T卡', content: '全新内容子丑寅卯。' })
+      assert.equal(r.action.startsWith('新建'), true, `应新建，实际 ${r.action}`)
+      assert.ok(!r.path.includes('_trashed'), `不能写进回收站，实际 ${r.path}`)
+      assert.equal(fs.readFileSync(gone.path, 'utf8'), trashedBefore, '回收站那份一字不动')
+      assert.equal((await call('memory_search', { query: '子丑寅卯' })).total, 1)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('update / link / 软删 摸不到回收站里的卡（B12）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: 'T1', content: '甲卡内容，独立。' })
+      await call('memory_save', { title: 'T2', content: '乙卡内容，独立。' })
+      const gone = await call('memory_forget', { title: 'T1', confirm: true })
+      const trashedBefore = fs.readFileSync(gone.path, 'utf8')
+      const t2Before = fs.readFileSync(path.join(lib.dir, '03-Knowledge', 'T2.md'), 'utf8')
+
+      await assert.rejects(() => call('memory_update', { title: 'T1', importance: 5 }), /不存在/)
+      await assert.rejects(() => call('memory_link', { source: 'T2', target: 'T1' }), /不存在/)
+      // 按回收站路径直接点名也不行
+      await assert.rejects(() => call('memory_update', { title: gone.path, importance: 5 }), /不存在/)
+      const again = await call('memory_forget', { title: 'T1', confirm: true })
+      assert.equal(again.mode, 'not-found', '已在回收站的卡不能再软删一次')
+
+      assert.equal(fs.readFileSync(gone.path, 'utf8'), trashedBefore, '回收站那份一字不动')
+      assert.equal(fs.readFileSync(path.join(lib.dir, '03-Knowledge', 'T2.md'), 'utf8'), t2Before, '不许留下单向边')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('read 仍能看回收站；permanent 删除仍能清回收站', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: 'R卡', content: '将被删的卡，独立内容。' })
+      const gone = await call('memory_forget', { title: 'R卡', confirm: true })
+      const read = await call('memory_read', { title: 'R卡' })
+      assert.equal(read.found, true, 'read 要能看到回收站里的卡')
+      assert.equal(read.status, 'deleted')
+      const preview = await call('memory_forget', { title: 'R卡', permanent: true })
+      assert.equal(preview.mode, 'preview', 'permanent 也要先预览')
+      assert.ok(fs.existsSync(gone.path), '预览不动文件')
+      const del = await call('memory_forget', { title: 'R卡', permanent: true, confirm: true })
+      assert.equal(del.mode, 'deleted')
+      assert.ok(!fs.existsSync(gone.path), '永久删除要能清掉回收站里的卡')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
