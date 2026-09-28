@@ -1584,6 +1584,45 @@ describe('审查修复①：回收站与保留目录隔离', () => {
   })
 })
 
+// 2026-09-28 审查复现 B10：forget 预览的引用计数只认「target === 标题」，
+// 按文件名 / 带目录前缀 / 带锚点写的引用全漏。独立最小库 + 干扰项，防期望值撞车。
+describe('审查修复③：forget 预览引用计数口径', () => {
+  it('标题 / 文件名 / 目录前缀 / 锚点 / 别名都算引用；同名不同目录与路人不算', async () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    try {
+      await call('memory_save', { title: '被 引用 卡', content: '被引用的卡内容，独立。' })
+      await call('memory_save', { title: '引用者一', content: '按文件名 [[被-引用-卡]]，一。' })
+      await call('memory_save', { title: '引用者二', content: '带目录 [[03-Knowledge/被-引用-卡]]，二。' })
+      await call('memory_save', { title: '引用者三', content: '按标题 [[被 引用 卡]]，三。' })
+      await call('memory_save', { title: '引用者四', content: '带锚点别名 [[被 引用 卡#小节|看这里]]，四。' })
+      await call('memory_save', { title: '干扰甲', content: '目录不对 [[08-Mistakes/被-引用-卡]]，甲。' })
+      await call('memory_save', { title: '干扰乙', content: '别的卡 [[引用者一]]，乙。' })
+      // 末段恰好是标题、目录却不对：必须不算（M10 变异「前缀不校验」只有这条能抓）
+      await call('memory_save', { title: '干扰丙', content: '目录不对但末段是标题 [[08-Mistakes/被 引用 卡]]，丙。' })
+      const p = await call('memory_forget', { title: '被 引用 卡' })
+      assert.equal(p.mode, 'preview')
+      assert.equal(p.referrers, 4, `应为 4（一二三四），实际 ${p.referrers}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('linkPointsTo 单元：大小写不敏感、.md 后缀、反斜杠', () => {
+    const card = { title: 'Foo Bar', path: path.join('X', '03-Knowledge', 'Foo-Bar.md') }
+    assert.equal(I.linkPointsTo('foo bar', card), true)
+    assert.equal(I.linkPointsTo('Foo-Bar.md', card), true)
+    assert.equal(I.linkPointsTo('03-Knowledge\\Foo-Bar', card), true)
+    assert.equal(I.linkPointsTo('03-Knowledge/Foo Bar', card), true)
+    assert.equal(I.linkPointsTo('02-Projects/Foo-Bar', card), false)
+    assert.equal(I.linkPointsTo('02-Projects/Foo Bar', card), false, '末段是标题但目录不对，不算')
+    assert.equal(I.linkPointsTo('Foo', card), false)
+    assert.equal(I.linkPointsTo('', card), false)
+  })
+})
+
 // 2026-09-28 审查复现 B8：用户/Obsidian 插件写的未知 frontmatter 字段，任何写入都不能抹掉。
 describe('审查修复②：未知 frontmatter 字段原样保留', () => {
   const fresh = () => {
