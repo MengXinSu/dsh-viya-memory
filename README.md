@@ -75,8 +75,8 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 | 工具 | 参数（**加粗**必填） | 行为 |
 |---|---|---|
 | `memory_save` | **`title`** · **`content`** · `kind` · `tags` · `keywords` · `importance` · `links` · `severity` · `occurred_at` | 拼 frontmatter、按 kind 选目录、slug 文件名、原子写、搬运正文里的本地图片 |
-| `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 摘要；`query` 支持 `\|` 分关键词（AND）与 `*` 通配 |
-| `memory_read` | **`title`** 或 **`path`** | 正文全文 + `status`/`updated`/`links` + 附件绝对路径（不自动读图，图片 token 贵） |
+| `memory_search` | **`query`** · `limit` · `tags` · `threshold` · `start_time` · `end_time` | 返回标题 + 路径 + 标签 + 摘要；`query` 用空格或 `\|` 分关键词（AND），`*` 通配 |
+| `memory_read` | **`title`** 或 **`path`** | 正文全文 + `status`/`updated`/`links` + 附件绝对路径（不自动读图，图片 token 贵）；找不到时附最多 3 个相近标题 |
 | `memory_update` | **`title`** · `content` · `tags` · `status` · `importance` · `keywords` · `occurred_at` | 给哪个改哪个，`created` 不动、`updated` 自动刷新 |
 | `memory_link` | **`source`** · **`target`** · `type` · `weight` · `description` | 两张卡各写一条 `[[]]`；两边都找得到才写 |
 | `memory_forget` | **`title`** · `confirm` · `permanent` | **两步删**：不传 `confirm` 只返回预览（删哪张、谁引用了它、一个字节都不动）；`confirm: true` 才软删进 `_trashed/`；`permanent: true` 真删（同样要 confirm） |
@@ -112,7 +112,7 @@ dsh plugin --profile <你的 profile 名> add github:MengXinSu/dsh-viya-memory
 node --test tests/selftest.mjs
 ```
 
-**127 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
+**133 项，全部走真实执行路径**：frontmatter 解析与往返（含标量写法与带逗号/引号/换行的值）、slug
 与文件名撞车、kind 三道闸、三层长度闸、bigram 重叠判断、敏感信息扫描、图片识别与搬运、检索分组
 与权重、七个工具的完整行为（撞名跳过 / 成节追加 / 单向边禁止 / mtime 冲突 / 软删回收站 / 体检死链 /
 路径夹取 / **删除的 confirm 硬闸**）、`user.md` 注入，以及一个在系统临时目录里跑的真文件系统端到端冒烟。
@@ -125,7 +125,7 @@ node --test tests/selftest.mjs
 - **标签与关键词**：`tags: [a, b]` 是正路；`a, b` 这种标量写法也认。**值里可以带逗号**——序列化时会
   自动加引号（`['标签1,标签2']` 是一个标签，不是两个）。同理，值里的换行会被压成空格，不会把
   frontmatter 写成两行。
-- **文件名只是存储**：标题 → 文件名的映射按**字节**截断（150 字节上限）。两个长标题即使截断后同名，
+- **文件名只是存储**：标题 → 文件名时，Windows 非法字符（`* : ? / \ " < > |`）转成全角同形字（`＊ ： ？`…），文件名保持可读；映射按**字节**截断（150 字节上限）。两个长标题即使截断后同名，
   也不会互相顶掉或误判「内容重合」——撞车时后者自动让位成 `名-2.md`。判重只看「同一张卡」，不看文件名。
 - **路径口径**：卡内引用的相对路径、以及 `memory_read` 的相对路径，都以**库根**为基准（和 Obsidian
   一致），不看进程 cwd。`.md` 以外、又带非图片后缀的路径不会被当图片搬走。绝对路径照常可用。

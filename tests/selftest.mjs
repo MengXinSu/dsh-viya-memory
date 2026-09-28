@@ -303,7 +303,8 @@ describe('frontmatter 解析与生成', () => {
 describe('slug 与 kind 匹配', () => {
   it('slug 保留中英文数字，压掉非法字符', () => {
     assert.equal(I.slugify('Hello World'), 'Hello-World')
-    assert.equal(I.slugify('a/b\\c:d*e?f'), 'a-b-c-d-e-f')
+    assert.equal(I.slugify('a/b\\c:d*e?f'), 'a／b＼c：d＊e？f', '非法字符转全角同形字，保义')
+    assert.equal(I.slugify('a#b^c[d]'), 'a-b-c-d', 'Obsidian 链接语法字符仍压成 -')
     assert.equal(I.slugify('  '), 'card')
     assert.equal(I.slugify('中文 标题（括号）'), '中文-标题（括号）')
     // 上限按**字节**算（150），不再是旧的 60 字符：中文一个字 3 字节，
@@ -1949,6 +1950,122 @@ describe('安全测验修复', () => {
       assert.ok(body.includes('_assets/图卡/shot.png') && body.includes('_assets/图卡/shot-2.png'), `引用要各指各的：\n${body}`)
     } finally {
       for (const d of [src1, src2, lib.dir]) fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
+})
+
+// 2026-09-28 工具调用测试（真实库上跑出来的「用着不舒服」）
+describe('工具调用体验修复', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, tools: made.tools, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  it('代码里的图片语法不算图片：不报「找不到」、不搬、不改写', async () => {
+    const { lib, call } = fresh()
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-codeimg-'))
+    try {
+      const real = path.join(src, 'real.png').replace(/\\/g, '/')
+      fs.writeFileSync(real, 'PNG')
+      const content = `行内示例 \`![[嵌入]]\` 与 \`![x](${real})\`\n\n\`\`\`\n![y](${real})\n\`\`\`\n结尾`
+      const r = await call('memory_save', { title: '代码图卡', content })
+      assert.ok(!r.action.includes('找不到'), `代码里的示例不该报找不到：${r.action}`)
+      assert.ok(!fs.existsSync(path.join(lib.dir, '_assets')), '代码里的路径不能被搬进库')
+      const card = I.parseCard(fs.readFileSync(r.path, 'utf8'), r.path)
+      assert.equal(card.body, content, '正文一字不改')
+      // 代码外的真图照常搬（遮罩等长，下标不偏）
+      const r2 = await call('memory_update', { title: '代码图卡', content: `\`![a](${real})\` 真图 ![b](${real})` })
+      const body = I.parseCard(fs.readFileSync(r2.path, 'utf8'), r2.path).body
+      assert.ok(body.startsWith(`\`![a](${real})\` 真图 ![b](_assets/`), `只改写代码外那张：${body}`)
+    } finally {
+      for (const d of [src, lib.dir]) fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
+
+  it('空格（含全角）与 | 一样是 AND 分隔符', async () => {
+    assert.deepEqual(I.parseQuery('记忆 插件').groups, ['记忆', '插件'])
+    assert.deepEqual(I.parseQuery('记忆\u3000插件|obsidian').groups, ['记忆', '插件', 'obsidian'])
+    assert.equal(I.parseQuery('  *  ').all, true)
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '记忆插件卡', content: '讲的是记忆，也讲插件。' })
+      await call('memory_save', { title: '只有记忆', content: '只讲记忆这一件事。' })
+      const r = await call('memory_search', { query: '记忆 插件' })
+      assert.equal(r.total, 1, `空格分词 AND：只有一张两个词都有，实际 ${r.total}`)
+      assert.equal(r.results[0].title, '记忆插件卡')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('预算降级 = 截短摘要（有内容、不重复标题），并带 tags', async () => {
+    const { lib, call } = fresh()
+    try {
+      for (let i = 0; i < 25; i += 1) {
+        await call('memory_save', { title: `降级卡${i}`, content: `第${i}张的正文开头独一无二${'填充内容'.repeat(60)}`, tags: [`t${i}`] })
+      }
+      const r = await call('memory_search', { query: '降级卡', limit: 25 })
+      assert.ok(r.degraded > 0, `25 张长卡必须触发降级，实际 degraded=${r.degraded}`)
+      const worst = r.results[r.results.length - 1]
+      assert.ok(!worst.summary.includes('详见'), `降级摘要不能是「详见」废话：${worst.summary}`)
+      assert.ok(worst.summary.includes('正文开头独一无二'), `降级摘要要有正文内容：${worst.summary}`)
+      assert.ok([...worst.summary].length <= 41, `降级摘要要截短，实际 ${[...worst.summary].length} 字`)
+      assert.deepEqual(worst.tags, [worst.title.replace('降级卡', 't')], '结果要带 tags')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('search 渲染带标签行', () => {
+    const { lib, tools } = fresh()
+    try {
+      const out = tools.get('memory_search').output.render({}, {
+        total: 1, returned: 1, degraded: 0,
+        results: [{ title: 't', path: 'p', kind: 'k', updated: 'd', summary: 's', hasImage: false, score: 1, tags: ['甲', '乙'] }],
+      }).map(b => b.text).join('\n')
+      assert.ok(out.includes('#甲 #乙'), `缺标签行：${out}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('read 找不到时给相近标题候选（最多 3 个、不含已删）', async () => {
+    const { lib, call, tools } = fresh()
+    try {
+      await call('memory_save', { title: 'viya-memory 现状与三个路径约定', content: '现状内容，独立。' })
+      await call('memory_save', { title: 'viya-memory 变异扫描器', content: '扫描器内容，独立。' })
+      await call('memory_save', { title: '完全无关的卡', content: '无关内容，独立。' })
+      await call('memory_save', { title: 'viya-memory 现状旧版', content: '旧版内容，独立。' })
+      await call('memory_update', { title: 'viya-memory 现状旧版', status: 'deleted' })
+      const r = await call('memory_read', { title: 'viya-memory 现状' })
+      assert.equal(r.found, false)
+      assert.ok(r.suggestions.includes('viya-memory 现状与三个路径约定'), `候选要有最接近的那张：${JSON.stringify(r.suggestions)}`)
+      assert.ok(!r.suggestions.includes('完全无关的卡'), '无关卡不进候选')
+      assert.ok(!r.suggestions.includes('viya-memory 现状旧版'), '已删卡不进候选')
+      assert.ok(r.suggestions.length <= 3)
+      const out = tools.get('memory_read').output.render({}, r).map(b => b.text).join('\n')
+      assert.ok(out.includes('你可能要找') && out.includes('现状与三个路径约定'), `渲染要带候选：${out}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('标题里的 * : ? 落盘成全角，文件名可读；老式 - 文件名的卡仍能按标题找到', async () => {
+    const { lib, call } = fresh()
+    try {
+      const r = await call('memory_save', { title: '把 * 翻成 .* 正则：为什么？', content: '内容，独立。' })
+      assert.equal(path.basename(r.path), '把-＊-翻成-.＊-正则：为什么？.md')
+      // 老卡：旧 slug 规则落盘的文件名
+      const old = path.join(lib.dir, '03-Knowledge', '旧-规则-卡.md')
+      fs.writeFileSync(old, '---\ntitle: \'旧 * 规则 卡\'\n---\n\n旧卡正文。\n', 'utf8')
+      const read = await call('memory_read', { title: '旧 * 规则 卡' })
+      assert.equal(read.found, true, '老文件名的卡按标题必须还能读到')
+      const up = await call('memory_save', { title: '旧 * 规则 卡', content: '完全不同的追加内容子丑寅卯。' })
+      assert.equal(up.path, old, '老卡追加要写回原文件，不能另起一张')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
     }
   })
 })
