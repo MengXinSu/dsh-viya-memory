@@ -1861,3 +1861,94 @@ describe('审查修复⑥：kind 跟随实际目录 / 块式列表剥引号 / �
     }
   })
 })
+
+// 2026-09-28 安全测验：S1 私钥被当图片拷进库 / S4 元数据里的密钥 / S5 通配查询 ReDoS / 同名同大小图片指错。
+describe('安全测验修复', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  it('S1 无扩展名的库外文件（id_rsa）不会被拷进 _assets，引用原样保留', async () => {
+    const { lib, call } = fresh()
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-sec-'))
+    try {
+      const key = path.join(outside, 'id_rsa')
+      fs.writeFileSync(key, 'PRIVATE')
+      const ref = key.replace(/\\/g, '/')
+      const r = await call('memory_save', { title: '私钥探针', content: `![k](${ref}) ![[${ref}]]` })
+      const assets = path.join(lib.dir, '_assets')
+      const copied = fs.existsSync(assets) ? fs.readdirSync(assets, { recursive: true }).filter(f => String(f).includes('id_rsa')) : []
+      assert.deepEqual(copied, [], `私钥不能被拷进库，实际 ${JSON.stringify(copied)}`)
+      assert.ok(fs.readFileSync(r.path, 'utf8').includes(ref), '引用原样保留')
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true })
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('S4 标题 / tags / keywords / links / 关系说明里的密钥同样拒绝写入', async () => {
+    const { lib, call } = fresh()
+    try {
+      await assert.rejects(() => call('memory_save', { title: 'key sk-abcdefghijklmnopqrstuvwx', content: '正常' }), /标题命中敏感信息/)
+      await assert.rejects(() => call('memory_save', { title: 'T1', content: '正常', tags: ['ghp_abcdefghijklmnopqrstuvwxyz1234'] }), /tags命中敏感信息/)
+      await assert.rejects(() => call('memory_save', { title: 'T2', content: '正常', keywords: 'AKIAABCDEFGHIJKLMNOP' }), /keywords命中敏感信息/)
+      await assert.rejects(() => call('memory_save', { title: 'T3', content: '正常', links: ['sk-abcdefghijklmnopqrstuvwx'] }), /links命中敏感信息/)
+      const kd = path.join(lib.dir, '03-Knowledge')
+      assert.ok(!fs.existsSync(kd) || fs.readdirSync(kd).length === 0, '被拒的都不能落盘')
+      await call('memory_save', { title: '甲卡', content: '甲的正文，独立。' })
+      await call('memory_save', { title: '乙卡', content: '乙的正文，独立。' })
+      await assert.rejects(() => call('memory_update', { title: '甲卡', tags: ['sk-abcdefghijklmnopqrstuvwx'] }), /tags命中敏感信息/)
+      await assert.rejects(() => call('memory_update', { title: '甲卡', keywords: 'AKIAABCDEFGHIJKLMNOP' }), /keywords命中敏感信息/)
+      await assert.rejects(() => call('memory_link', { source: '甲卡', target: '乙卡', description: 'token=sk-abcdefghijklmnopqrstuvwx' }), /关系说明命中敏感信息/)
+      for (const f of fs.readdirSync(kd)) {
+        const t = fs.readFileSync(path.join(kd, f), 'utf8')
+        assert.ok(!/sk-abcdefghij|AKIAABCD/.test(t), `${f} 里不能留下密钥`)
+      }
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('S5 多个 * 的查询不回溯：长正文上毫秒级返回，语义不变', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: 'R', content: 'a'.repeat(3900) })
+      await call('memory_save', { title: '通配卡', content: '先写记忆然后是插件\n下一行才有 Obsidian' })
+      const t = performance.now()
+      const r = await call('memory_search', { query: '*a*a*a*a*a*a*a*a*a*a*a*a*b' })
+      const ms = performance.now() - t
+      assert.equal(r.total, 0)
+      assert.ok(ms < 500, `应当线性返回，实际 ${ms.toFixed(0)}ms`)
+      assert.equal((await call('memory_search', { query: '记忆*插件' })).total, 1, '同一行内 * 通配要命中')
+      assert.equal((await call('memory_search', { query: '插件*obsidian' })).total, 0, '* 不跨行（与旧正则语义一致）')
+      assert.equal((await call('memory_search', { query: 'OBSIDIAN' })).total, 1, '大小写不敏感')
+      assert.equal((await call('memory_search', { query: 'a.b' })).total, 0, '. 是字面量，不是正则通配')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('同名同大小但内容不同的图片：另起名字，引用指向对的那张，不覆盖', async () => {
+    const { lib, call } = fresh()
+    const src1 = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-sec-'))
+    const src2 = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-sec-'))
+    try {
+      fs.writeFileSync(path.join(src1, 'shot.png'), 'AAAA')
+      fs.writeFileSync(path.join(src2, 'shot.png'), 'BBBB')
+      const ref = p => p.replace(/\\/g, '/')
+      const r1 = await call('memory_save', { title: '图卡', content: `第一张 ![](${ref(path.join(src1, 'shot.png'))})` })
+      const r2 = await call('memory_save', { title: '图卡', content: `完全不同的第二段 ![](${ref(path.join(src2, 'shot.png'))})` })
+      assert.equal(r1.path, r2.path)
+      const dir = path.join(lib.dir, '_assets', '图卡')
+      assert.equal(fs.readFileSync(path.join(dir, 'shot.png'), 'utf8'), 'AAAA', '第一张不能被覆盖')
+      assert.equal(fs.readFileSync(path.join(dir, 'shot-2.png'), 'utf8'), 'BBBB', '第二张另起名字')
+      const body = fs.readFileSync(r2.path, 'utf8')
+      assert.ok(body.includes('_assets/图卡/shot.png') && body.includes('_assets/图卡/shot-2.png'), `引用要各指各的：\n${body}`)
+    } finally {
+      for (const d of [src1, src2, lib.dir]) fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
+})
