@@ -1675,3 +1675,47 @@ describe('审查修复②：未知 frontmatter 字段原样保留', () => {
     assert.deepEqual(I.parseCard(out, 'x/03-Knowledge/T.md').extraFrontmatter, ['aliases: [q]'])
   })
 })
+
+// 2026-09-28 审查复现 B6：memory_save 的绝对路径标题不能把卡写到库外 / 保留目录 / 子目录。
+describe('审查修复④：save 只写库内一级卡目录', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+
+  it('库外绝对路径 → 报错，库外不落文件', async () => {
+    const { lib, call } = fresh()
+    const outside = path.join(os.tmpdir(), `viya-outside-${process.pid}-${Date.now()}`)
+    try {
+      await assert.rejects(() => call('memory_save', { title: outside, content: '库外写入测试，独立。' }), /不在记忆库内/)
+      assert.equal(fs.existsSync(`${outside}.md`), false, '库外绝不能出现文件')
+    } finally {
+      fs.rmSync(`${outside}.md`, { force: true })
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('库根 / 保留目录 / 深层子目录 → 报错且不落盘；一级卡目录绝对路径照常可写', async () => {
+    const { lib, call } = fresh()
+    try {
+      const bad = [
+        path.join(lib.dir, '根上的卡'),
+        path.join(lib.dir, '_trashed', '回收站里的卡'),
+        path.join(lib.dir, '.obsidian', '配置里的卡'),
+        path.join(lib.dir, '03-Knowledge', 'sub', '深层卡'),
+      ]
+      for (const p of bad) {
+        await assert.rejects(() => call('memory_save', { title: p, content: '不该落盘的内容，独立。' }), /拒绝写入/, `应拒绝：${p}`)
+        assert.equal(fs.existsSync(`${p}.md`), false, `不能落盘：${p}`)
+      }
+      const good = path.join(lib.dir, '03-Knowledge', '绝对路径卡')
+      const r = await call('memory_save', { title: good, content: '一级卡目录里的绝对路径，允许。' })
+      assert.equal(r.path, `${good}.md`)
+      assert.ok(fs.existsSync(r.path))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
