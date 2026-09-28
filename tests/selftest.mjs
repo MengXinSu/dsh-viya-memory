@@ -2166,3 +2166,37 @@ describe('追加时的 occurred_at', () => {
     }
   })
 })
+
+// 2026-09-28 边界探测：手写 YAML 的几种常见写法
+describe('手写 YAML 边界', () => {
+  const P = src => I.parseCard(src, 'x/03-Knowledge/T.md')
+
+  it('行尾注释不算值（引号内的 # 与无空白的 # 是内容）', () => {
+    const c = P("---\ntitle: E5 # 注释\ntags: [a, b] # 注释\nkeywords:\n  - 甲 # 注\n  - 'x # 不是注释'\nsource: a#b\n---\nbody")
+    assert.equal(c.title, 'E5')
+    assert.deepEqual(c.tags, ['a', 'b'])
+    assert.deepEqual(c.keywords, ['甲', 'x # 不是注释'])
+    assert.equal(c.source, 'a#b')
+  })
+
+  it('块标量 | / > 读出真正的内容，不是字面量 "|"', () => {
+    const c = P('---\ntitle: |\n  多行\n  标题\ntags: [t]\nsource: >\n  折叠\n  一行\n---\nbody')
+    assert.equal(c.title, '多行\n标题')
+    assert.equal(c.source, '折叠 一行')
+    assert.deepEqual(c.tags, ['t'], '块标量不能吞掉后面的字段')
+  })
+
+  it('status 大小写不敏感：Deleted 视为已删，不被搜到', async () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    try {
+      fs.mkdirSync(path.join(lib.dir, '03-Knowledge'), { recursive: true })
+      fs.writeFileSync(path.join(lib.dir, '03-Knowledge', 'E8.md'), '---\ntitle: E8\nstatus: Deleted\n---\n\n大写删除标记独特内容。\n', 'utf8')
+      assert.equal((await call('memory_search', { query: '大写删除标记' })).total, 0)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
