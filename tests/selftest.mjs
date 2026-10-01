@@ -453,14 +453,16 @@ describe('检索', () => {
     assert.ok(byTag > byBody, '标签应高于正文')
   })
 
-  it('多关键词是 OR：缺一个只少加分，不淘汰', () => {
+  it('多关键词默认 AND：缺一个就淘汰；requireAll=false 才放宽', () => {
     const p = I.parseQuery('mtime|并发')
-    const one = I.scoreCard(mk({ title: 'mtime 只能说明' }), p)
-    assert.ok(one !== null, '命中一个词就该留下（2026-10-01 前这里会被淘汰）')
+    const onlyOne = mk({ title: 'mtime 只能说明' })
+    assert.equal(I.scoreCard(onlyOne, p), null, '默认 AND：缺一个词就淘汰')
     const both = I.scoreCard(mk({ title: 'mtime 与并发写冲突' }), p)
     assert.ok(both !== null)
-    assert.ok(both.score > one.score, '两个词都命中的分更高')
-    assert.equal(I.scoreCard(mk({ title: '完全不相干' }), p), null, '一个词都没中才淘汰')
+    const relaxed = I.scoreCard(onlyOne, p, { requireAll: false })
+    assert.ok(relaxed !== null, '放宽模式（0 结果兜底走的那条）下命中一个词就留下')
+    assert.ok(both.score > relaxed.score, '两个词都命中的分更高')
+    assert.equal(I.scoreCard(mk({ title: '完全不相干' }), p, { requireAll: false }), null, '一个词都没中才淘汰')
   })
 
   it('词内 * 通配能匹配上', () => {
@@ -2055,9 +2057,10 @@ describe('工具调用体验修复', () => {
       await call('memory_save', { title: '记忆插件卡', content: '讲的是记忆，也讲插件。' })
       await call('memory_save', { title: '只有记忆', content: '只讲记忆这一件事。' })
       const r = await call('memory_search', { query: '记忆 插件' })
-      // 2026-10-01 起分词是 OR 召回：只中一个词的也进结果，靠分数排序压下去
-      assert.equal(r.total, 2, `空格分词后两个词都参与打分，实际 ${r.total}`)
-      assert.equal(r.results[0].title, '记忆插件卡', '两个词都命中的必须排前面')
+      // 两张卡里只有一张同时含两个词 → AND 轮就有结果，不该触发放宽
+      assert.equal(r.total, 1, `默认 AND：只返回同时含两词的卡，实际 ${r.total}`)
+      assert.equal(r.results[0].title, '记忆插件卡')
+      assert.equal(r.relaxed, false, 'AND 轮有结果，不许放宽')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
@@ -2697,12 +2700,13 @@ describe('memory_update 的 mode=rename：改标题要连引用一起改', () =>
   })
 })
 
-// ────────── 2026-10-01：检索语义修正（多词 OR 召回 + aliases 进打分） ──────────
+// ────── 2026-10-01：检索语义（AND 主路径 + 0 结果才放宽 + aliases 进打分） ──────
 //
-// 老行为是「任一组不命中即淘汰」，等于加词即自杀：实测 `撤回|收摊` 直接 0 命中，
-// 就因为「收摊」不在任何卡里。现在改成 OR 累加，精度由「一个词都没命中才丢」兜住。
+// 中间版本曾经改成「无条件 OR」：治好了 0 命中，又引进了高频词噪音（实测 `github|PR|插件|记忆`
+// 命中 48 张、目标卡掉出前 12）。最终形态是两轮——AND 优先，只有**一张都没捞到时**才跑 OR 兜底。
+// 兜底只发生在「本来也会是 0 条」的时候，所以放宽本身不付代价；代价那一头由返回里的 relaxed 标记兜着。
 
-describe('memory_search 的多词语义：OR 召回，但至少命中一个词', () => {
+describe('memory_search 的多词语义：默认 AND，0 结果才放宽', () => {
   const fresh = () => {
     const lib = tempLibrary()
     const made = makeCtx()
@@ -2711,37 +2715,70 @@ describe('memory_search 的多词语义：OR 召回，但至少命中一个词',
     return { lib, tools: made.tools, call }
   }
 
-  it('一个词不中不再把整张卡淘汰掉', async () => {
+  it('AND 有结果时不放宽：只返回同时含全部词的卡', async () => {
     const { lib, call } = fresh()
     try {
-      await call('memory_save', { title: '甲卡', content: '甲的内容，讲插件。' })
-      const r = await call('memory_search', { query: '甲|压根没有这词' })
-      assert.equal(r.total, 1, '命中一个词就该召回，不该被另一个词拖死')
-      assert.equal(r.results[0].title, '甲卡')
+      await call('memory_save', { title: '双中卡', content: '甲和乙都在这里。' })
+      await call('memory_save', { title: '单中卡', content: '只有甲，没有那个。' })
+      const r = await call('memory_search', { query: '甲|乙' })
+      assert.equal(r.total, 1, `默认 AND：只该返回同时含两词的卡，实际 ${r.total}`)
+      assert.equal(r.results[0].title, '双中卡')
+      assert.equal(r.relaxed, false, 'AND 轮有结果就不许放宽')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
   })
 
-  it('一个词都不命中 → 照样 0 条（精度闸没丢）', async () => {
+  it('AND 一张都没捞到 → 自动放宽成 OR，并在输出里自曝', async () => {
+    const { lib, tools, call } = fresh()
+    try {
+      await call('memory_save', { title: '甲卡', content: '甲的内容，讲插件。' })
+      // 「压根没有这词」不在任何卡里：AND 轮 0 条 → 放宽后靠「甲」把这张捞回来
+      const r = await call('memory_search', { query: '甲|压根没有这词' })
+      assert.equal(r.relaxed, true, '该走放宽路径')
+      assert.equal(r.total, 1, '放宽后命中一个词就能召回')
+      assert.equal(r.results[0].title, '甲卡')
+      const out = tools.get('memory_search').output.render({}, r).map(b => b.text).join('\n')
+      assert.match(out, /已放宽/, `放宽必须在输出里说清楚，别让人当成「全部命中」：${out}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('两个词都不命中 → 放宽也救不回来，照样 0 条', async () => {
     const { lib, call } = fresh()
     try {
       await call('memory_save', { title: '丙卡', content: '丙的内容。' })
       const r = await call('memory_search', { query: '压根没有这词|也没有那词' })
       assert.equal(r.total, 0, '完全不相干的卡不许混进来')
+      assert.equal(r.relaxed, false, '放宽后仍是 0 条，不算放宽成功')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
   })
 
-  it('命中越多分越高：OR 只是不淘汰，排序照旧', async () => {
+  it('放宽后按命中词数排：含两个词的压在只含一个的前面', async () => {
     const { lib, call } = fresh()
     try {
       await call('memory_save', { title: '双中卡', content: '甲和乙都在这里。' })
       await call('memory_save', { title: '单中卡', content: '只有甲。' })
-      const r = await call('memory_search', { query: '甲|乙' })
+      // 「丙」不在任何卡里 → AND 轮 0 条 → 放宽
+      const r = await call('memory_search', { query: '甲|乙|丙' })
+      assert.equal(r.relaxed, true)
       assert.equal(r.total, 2)
-      assert.equal(r.results[0].title, '双中卡', '两个词都命中的该排前面')
+      assert.equal(r.results[0].title, '双中卡', '命中词数多的排前面')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('单词查询没有「放宽」这回事', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '丁卡', content: '丁的内容。' })
+      const miss = await call('memory_search', { query: '压根没有这词' })
+      assert.equal(miss.total, 0)
+      assert.equal(miss.relaxed, false, '只有一个词时无宽可放')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
