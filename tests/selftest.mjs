@@ -985,6 +985,21 @@ describe('工具真实调用（临时库）', () => {
       `按文件名写的库内链接不许判死链，实际：${JSON.stringify(r.deadLinks)}`)
   })
 
+  // 2026-10-01 实测撞出的第三种误报：库**根目录**的 .md（`Home.md` / `AGENTS.md`）不进检索池
+  // （scanLibrary 只扫一级子目录），但 Obsidian 按文件名解析，`[[Home]]` 在那边点得开。
+  // 判据只装池内文件 → 同一类链接被误报成死链。判据和检索池是两码事。
+  it('memory_stats：库根目录的 .md 链接不算死链（不进池但要认）', async () => {
+    fs.writeFileSync(path.join(lib.dir, 'Home.md'), '---\ntitle: Home\n---\n\n库主页。\n', 'utf8')
+    await call('memory_save', {
+      title: '引用根目录文件的卡',
+      content: '指向 [[Home]]，Obsidian 里点得开，不该被判成断链。',
+      kind: 'knowledge',
+    })
+    const r = await call('memory_stats', {})
+    assert.ok(!r.deadLinks.some(l => l.includes('Home')),
+      `根目录文件的链接不许判死链，实际：${JSON.stringify(r.deadLinks)}`)
+  })
+
   // 2026-09-28 事故后加的硬闸：不传 confirm 一律不落手。
   // 背景：误删的根因不是「不知道规矩」，而是「执行时没人拦」——提示词约束不了执行者。
   it('memory_forget 不传 confirm → 只预览，一个字节都不动', async () => {
