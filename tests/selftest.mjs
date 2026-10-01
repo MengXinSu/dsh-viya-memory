@@ -2401,3 +2401,293 @@ describe('工具返回值满足声明的 output schema（2026-09-28 修复回归
     }
   })
 })
+
+// ──────────── 2026-10-01：memory_update 的 mode（编辑粒度全进一个工具） ────────────
+//
+// 骨架抄 Anthropic 官方 memory tool 的「1 工具 N 子命令」，节粒度借 palace 的 update_section。
+// 要点是**缺省 mode=replace 必须跟老行为一字不差**——146 条老用例就是这条的回归网。
+
+describe('memory_update 的 mode：replace / append / section / str', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    return { lib, tools: made.tools, call }
+  }
+  const read = p => fs.readFileSync(p, 'utf8')
+  const count = (text, needle) => text.split(needle).length - 1
+
+  it('不给 mode → 仍是整段替换（向后兼容）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '老调用卡', content: '旧正文。' })
+      const r = await call('memory_update', { title: '老调用卡', content: '新正文。' })
+      assert.equal(r.words, 4)
+      assert.ok(read(s.path).includes('新正文。'))
+      assert.ok(!read(s.path).includes('旧正文。'))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode 非法 → 报错，且不动卡', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '模式卡', content: '原文。' })
+      const before = read(s.path)
+      await assert.rejects(() => call('memory_update', { title: '模式卡', mode: 'patch', content: 'x' }), /mode 只能是/)
+      assert.equal(read(s.path), before, '报错不该动文件')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=append 不给 section → 追加「更新 <今天>」节，原文保留', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '追加卡', content: '第一段。' })
+      await call('memory_update', { title: '追加卡', mode: 'append', content: '第二段。' })
+      const text = read(s.path)
+      assert.ok(text.includes('第一段。'), '原文要留着')
+      assert.ok(text.includes('第二段。'))
+      assert.match(text, /## 更新 \d{4}-\d{2}-\d{2}/, '默认节标题是当天的「更新」')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=append 给 section → 续写节尾；同节追加两次不产生第二个同名标题', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '续写卡', content: '开场。' })
+      await call('memory_update', { title: '续写卡', mode: 'append', section: '日志', content: '第一条。' })
+      await call('memory_update', { title: '续写卡', mode: 'append', section: '日志', content: '第二条。' })
+      const text = read(s.path)
+      assert.equal(count(text, '## 日志'), 1, '同名节只该有一个')
+      const section = text.slice(text.indexOf('## 日志'))
+      assert.ok(section.indexOf('第一条。') < section.indexOf('第二条。'), '追加要按时间顺序')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=section 只换那一节，其它节一字不动', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', {
+        title: '分节卡',
+        content: '开头。\n\n## 状态\n旧状态。\n\n## 坑\n踩过的坑，别动我。',
+      })
+      await call('memory_update', { title: '分节卡', mode: 'section', section: '状态', content: '新状态。' })
+      const text = read(s.path)
+      assert.ok(text.includes('## 状态\n新状态。'))
+      assert.ok(!text.includes('旧状态。'), '旧节内容该没了')
+      assert.ok(text.includes('## 坑\n踩过的坑，别动我。'), '别的节必须原样保留')
+      assert.ok(text.includes('开头。'))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=section：节不存在 → 新建在末尾；节内的 ### 子标题跟着一起换', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', {
+        title: '深层卡',
+        content: '## 甲\n### 子标题\n旧内容。\n\n## 乙\n保留。',
+      })
+      await call('memory_update', { title: '深层卡', mode: 'section', section: '甲', content: '整段换掉。' })
+      const after = read(s.path)
+      assert.ok(!after.includes('### 子标题'), '### 属于该节，不算节边界')
+      assert.ok(after.includes('## 乙\n保留。'))
+      await call('memory_update', { title: '深层卡', mode: 'section', section: '丙', content: '新的节。' })
+      const created = read(s.path)
+      assert.ok(created.includes('## 丙\n新的节。'), '缺节时该新建')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=section 不给 section → 报错', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '缺参卡', content: '正文。' })
+      await assert.rejects(() => call('memory_update', { title: '缺参卡', mode: 'section', content: 'x' }), /需要 section/)
+      await assert.rejects(() => call('memory_update', { title: '缺参卡', mode: 'append' }), /需要 content/)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=str 唯一命中才替换；找不到、不唯一都报错且不动文件', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '片段卡', content: '甲和乙和丙。' })
+      const before = read(s.path)
+      await assert.rejects(
+        () => call('memory_update', { title: '片段卡', mode: 'str', find: '丁', content: 'x' }),
+        /找不到/,
+      )
+      assert.equal(read(s.path), before, '找不到不该动文件')
+      await assert.rejects(
+        () => call('memory_update', { title: '片段卡', mode: 'str', find: '和', content: '、' }),
+        /不唯一/,
+      )
+      assert.equal(read(s.path), before, '不唯一不该动文件')
+      const r = await call('memory_update', { title: '片段卡', mode: 'str', find: '丙', content: '丁' })
+      assert.ok(read(s.path).includes('甲和乙和丁。'))
+      assert.ok(r.changed.includes('正文片段'))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('mode=str 的多行 find 也能换（节整段换不动时的备用刀）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '多行卡', content: '前言。\n\n旧的一段\n跨两行。\n\n后记。' })
+      await call('memory_update', {
+        title: '多行卡',
+        mode: 'str',
+        find: '旧的一段\n跨两行。',
+        content: '换成新的。',
+      })
+      const text = read(s.path)
+      assert.ok(text.includes('换成新的。'))
+      assert.ok(!text.includes('旧的一段'))
+      assert.ok(text.includes('前言。') && text.includes('后记。'))
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('memory_update 的 mode=rename：改标题要连引用一起改', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    return { lib, tools: made.tools, call }
+  }
+  const read = p => fs.readFileSync(p, 'utf8')
+
+  it('改名：换文件、换 title、旧标题进 aliases、引用者的 [[旧]] 改成 [[新]]', async () => {
+    const { lib, call } = fresh()
+    try {
+      const s = await call('memory_save', { title: '旧名字', content: '被引用的卡。' })
+      const ref = await call('memory_save', { title: '引用者', content: '见 [[旧名字|那个别名]] 和 [[旧名字#某节]]。' })
+      const r = await call('memory_update', { title: '旧名字', mode: 'rename', newTitle: '新名字' })
+      assert.equal(r.title, '新名字')
+      assert.equal(r.renamedFrom, '旧名字')
+      assert.equal(r.referrers, 1, '引用者该被改到')
+      assert.deepEqual(r.referrerFailures, [])
+      assert.equal(fs.existsSync(s.path), false, '旧文件该没了')
+      assert.equal(fs.existsSync(r.path), true, '新文件该在')
+
+      const moved = read(r.path)
+      assert.match(moved, /title: 新名字/)
+      assert.ok(moved.includes('旧名字'), '旧标题要留在 aliases 里，老链接才不会立刻死')
+      assert.ok(moved.includes('被引用的卡。'), '正文不该丢')
+
+      const refText = read(ref.path)
+      assert.ok(refText.includes('[[新名字|那个别名]]'), '|别名 要保留')
+      assert.ok(refText.includes('[[新名字#某节]]'), '#锚点 要保留')
+      assert.ok(!refText.includes('[[旧名字'), '旧链接该改干净')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名：frontmatter 里声明式的 links 也跟着改', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '目标卡', content: '被引用。' })
+      const ref = await call('memory_save', { title: '声明者', content: '正文没提它。', links: ['目标卡'] })
+      const r = await call('memory_update', { title: '目标卡', mode: 'rename', newTitle: '改名后' })
+      assert.ok(read(ref.path).includes('target: 改名后'), '声明式边的 target 要跟着改')
+      assert.equal(r.referrers, 1)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名：代码块里的 [[旧]] 是示例文本，不许改', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '示例卡', content: '示例。' })
+      const ref = await call('memory_save', {
+        title: '文档卡',
+        content: '真链接 [[示例卡]]，行内 `[[示例卡]]`。\n\n```\n[[示例卡]]\n```\n',
+      })
+      await call('memory_update', { title: '示例卡', mode: 'rename', newTitle: '改过的卡' })
+      const text = read(ref.path)
+      assert.equal(text.split('[[改过的卡]]').length - 1, 1, '只有真链接该被改')
+      assert.equal(text.split('[[示例卡]]').length - 1, 2, '行内与围栏里的两个原样留着')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名：目标文件名已被占用 → 报错且原卡不动', async () => {
+    const { lib, call } = fresh()
+    try {
+      const a = await call('memory_save', { title: '甲卡', content: '甲。' })
+      await call('memory_save', { title: '乙卡', content: '乙。' })
+      const before = read(a.path)
+      await assert.rejects(
+        () => call('memory_update', { title: '甲卡', mode: 'rename', newTitle: '乙卡' }),
+        /已被占用/,
+      )
+      assert.equal(fs.existsSync(a.path), true, '原卡该在')
+      assert.equal(read(a.path), before, '原卡内容不许动')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名：标题带 | 时，引用标签改用文件名（[[ ]] 里带 | 会被截断）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '竖线卡', content: '被引用。' })
+      const ref = await call('memory_save', { title: '引用方', content: '见 [[竖线卡]]。' })
+      const r = await call('memory_update', { title: '竖线卡', mode: 'rename', newTitle: '甲|乙' })
+      assert.ok(!read(ref.path).includes('[[甲|乙]]'), '不能把带 | 的标题塞进双链')
+      assert.ok(r.path.includes('甲｜乙'), `文件名该走全角同形字：${r.path}`)
+      assert.ok(read(ref.path).includes('[[甲｜乙]]'), '引用改用落盘文件名当标签')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名：新标题与现标题相同 → 报错（不做无意义的重写）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '同名卡', content: '正文。' })
+      await assert.rejects(
+        () => call('memory_update', { title: '同名卡', mode: 'rename', newTitle: '同名卡' }),
+        /不用改/,
+      )
+      await assert.rejects(() => call('memory_update', { title: '同名卡', mode: 'rename' }), /需要 newTitle/)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('改名后能按新标题找到、按旧标题也能读到（aliases 兜底）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '可寻卡', content: '内容若干。' })
+      const r = await call('memory_update', { title: '可寻卡', mode: 'rename', newTitle: '新寻卡' })
+      assert.equal((await call('memory_search', { query: '内容若干' })).total, 1, '改名后还搜得到')
+      const byNew = await call('memory_read', { title: '新寻卡' })
+      assert.equal(byNew.found, true)
+      assert.equal(byNew.path, r.path)
+      const byOld = await call('memory_read', { title: '可寻卡' })
+      assert.equal(byOld.found, true, '旧标题靠 aliases 也要能读到')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
