@@ -1641,7 +1641,10 @@ describe('审查修复②：未知 frontmatter 字段原样保留', () => {
   const EXTRA = 'aliases: [别名一, 别名二]\ncssclasses:\n  - wide\n  - no-title\nplugin_cfg:\n  nested: 1\n  deep: "x: y"'
   const inject = (file) => {
     const t = fs.readFileSync(file, 'utf8')
-    fs.writeFileSync(file, t.replace(/\n---\n/, `\n${EXTRA}\n---\n`), 'utf8')
+    // 2026-10-01 起 serializeCard 会自动补 aliases；先摘掉它模拟"历史卡"，再注入手写字段——
+    // 否则卡里会并排出现两个 aliases 块，下面"不重复"的断言会误报。
+    const cleaned = t.replace(/\naliases:\n {2}- [^\n]*\n/, '\n')
+    fs.writeFileSync(file, cleaned.replace(/\n---\n/, `\n${EXTRA}\n---\n`), 'utf8')
   }
   const assertExtra = (file, when) => {
     const t = fs.readFileSync(file, 'utf8')
@@ -1679,6 +1682,60 @@ describe('审查修复②：未知 frontmatter 字段原样保留', () => {
     assert.equal(out.split('links:').length - 1, 1, 'links 只能出现一次')
     // 往返稳定：再解析一次，未知字段不变
     assert.deepEqual(I.parseCard(out, 'x/03-Knowledge/T.md').extraFrontmatter, ['aliases: [q]'])
+  })
+})
+
+// 2026-10-01：卡的文件名是 slug 版、title 是空格版，而关系边按 title 记（frontmatter 的 links），
+// 缺 aliases 时 `[[卡片标题]]` 在 Obsidian 里解析不了——插件的死链判据认标题，所以从插件侧看不见。
+// serializeCard 因此自动补一行 aliases；三条护栏见下方用例。
+describe('自动补 aliases：让 [[卡片标题]] 在 Obsidian 里可解析', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
+  }
+  const fmOf = (file) => fs.readFileSync(file, 'utf8').split('\n---\n')[0]
+
+  it('新建卡自动带上 aliases = 标题（标题含空格时原样保留）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const card = await call('memory_save', { title: '带空格 的标题卡', content: '内容甲乙丙丁，独立。' })
+      const fm = fmOf(card.path)
+      // fmOf 已按 "\n---\n" 切开，fm 末尾没有换行——断言里别要求行尾 \n。
+      const m = /\naliases:\n {2}- (.+)$/m.exec(fm)
+      assert.ok(m, `没有写出 aliases，实际 frontmatter：\n${fm}`)
+      assert.equal(m[1].replace(/^['"]|['"]$/g, ''), '带空格 的标题卡', 'aliases 的值必须等于标题')
+      assert.equal(fm.split('aliases:').length - 1, 1, 'aliases 只该出现一次')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('手写过 aliases 的卡绝不覆盖（用户改过就要尊重）', async () => {
+    const { lib, call } = fresh()
+    try {
+      const card = await call('memory_save', { title: '手写卡', content: '内容子丑寅卯，独立。' })
+      const t = fs.readFileSync(card.path, 'utf8')
+      fs.writeFileSync(card.path, t.replace(/\naliases:\n {2}- [^\n]*\n/, '\naliases: [我的别名]\n'), 'utf8')
+      await call('memory_update', { title: '手写卡', importance: 4 })
+      const fm = fmOf(card.path)
+      assert.ok(fm.includes('aliases: [我的别名]'), `用户手写的 aliases 被覆盖了：\n${fm}`)
+      assert.equal(fm.split('aliases:').length - 1, 1, 'aliases 不能变成两个')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('标题含 | # [ ] 时跳过——那几种写在 [[ ]] 里本来就会被截断', async () => {
+    const { lib, call } = fresh()
+    try {
+      const card = await call('memory_save', { title: '含[方括号]的标题', content: '内容戊己庚辛，独立。' })
+      const fm = fmOf(card.path)
+      assert.equal(fm.split('aliases:').length - 1, 0, `不该写 aliases：\n${fm}`)
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
   })
 })
 

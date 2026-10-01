@@ -23,6 +23,7 @@ Seven model-facing tools, no database, no background process, no lock-in.</sub>
 - **关系白送**：`memory_link` 往两张卡**各写一条** `[[双链]]`，要么两边都写、要么都不写，不留单向边。
 - **不怕误删**：删除是**两步**的——不带 `confirm: true` 只返回预览，一个字节都不动；默认软删进 `_trashed/`。
 - **不覆盖你的手改**：写入前比对 mtime，你在 Obsidian 里改过的卡不会被旧内容冲掉；你手写的 `aliases`、`cssclasses` 等字段逐字保留。
+- **自动补 `aliases`**：卡的文件名是 slug 版（`标题-变成-这样.md`）、标题是空格版，而卡之间的边又按标题记——少一行 `aliases`，`[[卡片标题]]` 在 Obsidian 里就解析不了（插件的死链判据认标题，所以从插件侧看不见）。写入时自动补；手写过 `aliases` 的卡绝不覆盖，标题含 `| # [ ]` 时跳过（那几种写在 `[[]]` 里本来就会被截断）；想彻底关掉，手写一行任意 `aliases` 即可。
 - **不让密钥入库**：正文、标题、tags、keywords、关系说明命中密钥特征就拒绝写入（库常常会同步到网盘 / 手机）。
 - **关得住**：`save` / `update` / `link` / `forget` 只认库内，路径穿越、junction 绕路都会被拒。
 - **调用即走**：没有定时器、子进程、监听，不驻留后台；写入原子（临时文件 → rename）。1000 张卡规模下实测单次调用约 50–100ms（本机自测，非基准测试）。
@@ -109,7 +110,7 @@ host 插件改动后需**重启 DSH** 才生效。
 node --test tests/selftest.mjs
 ```
 
-**143 项，全部走真实执行路径**（mock 一个 ctx 调 `apply()`，捕获实际注册的工具再真的调用）：frontmatter 往返、
+**146 项，全部走真实执行路径**（mock 一个 ctx 调 `apply()`，捕获实际注册的工具再真的调用）：frontmatter 往返、
 slug 与撞名、kind 三道闸、长度闸、敏感扫描、图片搬运、检索与预算降级、七个工具的完整行为、路径夹取与
 junction、删除硬闸、`user.md` 注入，以及真文件系统端到端冒烟。
 
