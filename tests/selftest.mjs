@@ -453,10 +453,14 @@ describe('检索', () => {
     assert.ok(byTag > byBody, '标签应高于正文')
   })
 
-  it('多关键词是 AND：缺一个就淘汰', () => {
+  it('多关键词是 OR：缺一个只少加分，不淘汰', () => {
     const p = I.parseQuery('mtime|并发')
-    assert.equal(I.scoreCard(mk({ title: 'mtime 只能说明' }), p), null)
-    assert.ok(I.scoreCard(mk({ title: 'mtime 与并发写冲突' }), p) !== null)
+    const one = I.scoreCard(mk({ title: 'mtime 只能说明' }), p)
+    assert.ok(one !== null, '命中一个词就该留下（2026-10-01 前这里会被淘汰）')
+    const both = I.scoreCard(mk({ title: 'mtime 与并发写冲突' }), p)
+    assert.ok(both !== null)
+    assert.ok(both.score > one.score, '两个词都命中的分更高')
+    assert.equal(I.scoreCard(mk({ title: '完全不相干' }), p), null, '一个词都没中才淘汰')
   })
 
   it('词内 * 通配能匹配上', () => {
@@ -2042,7 +2046,7 @@ describe('工具调用体验修复', () => {
     }
   })
 
-  it('空格（含全角）与 | 一样是 AND 分隔符', async () => {
+  it('空格（含全角）与 | 都是分词符', async () => {
     assert.deepEqual(I.parseQuery('记忆 插件').groups, ['记忆', '插件'])
     assert.deepEqual(I.parseQuery('记忆\u3000插件|obsidian').groups, ['记忆', '插件', 'obsidian'])
     assert.equal(I.parseQuery('  *  ').all, true)
@@ -2051,8 +2055,9 @@ describe('工具调用体验修复', () => {
       await call('memory_save', { title: '记忆插件卡', content: '讲的是记忆，也讲插件。' })
       await call('memory_save', { title: '只有记忆', content: '只讲记忆这一件事。' })
       const r = await call('memory_search', { query: '记忆 插件' })
-      assert.equal(r.total, 1, `空格分词 AND：只有一张两个词都有，实际 ${r.total}`)
-      assert.equal(r.results[0].title, '记忆插件卡')
+      // 2026-10-01 起分词是 OR 召回：只中一个词的也进结果，靠分数排序压下去
+      assert.equal(r.total, 2, `空格分词后两个词都参与打分，实际 ${r.total}`)
+      assert.equal(r.results[0].title, '记忆插件卡', '两个词都命中的必须排前面')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
@@ -2686,6 +2691,70 @@ describe('memory_update 的 mode=rename：改标题要连引用一起改', () =>
       assert.equal(byNew.path, r.path)
       const byOld = await call('memory_read', { title: '可寻卡' })
       assert.equal(byOld.found, true, '旧标题靠 aliases 也要能读到')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// ────────── 2026-10-01：检索语义修正（多词 OR 召回 + aliases 进打分） ──────────
+//
+// 老行为是「任一组不命中即淘汰」，等于加词即自杀：实测 `撤回|收摊` 直接 0 命中，
+// 就因为「收摊」不在任何卡里。现在改成 OR 累加，精度由「一个词都没命中才丢」兜住。
+
+describe('memory_search 的多词语义：OR 召回，但至少命中一个词', () => {
+  const fresh = () => {
+    const lib = tempLibrary()
+    const made = makeCtx()
+    mod.apply(made.ctx, lib.config)
+    const call = (name, args) => made.tools.get(name).execute(args, {})
+    return { lib, tools: made.tools, call }
+  }
+
+  it('一个词不中不再把整张卡淘汰掉', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '甲卡', content: '甲的内容，讲插件。' })
+      const r = await call('memory_search', { query: '甲|压根没有这词' })
+      assert.equal(r.total, 1, '命中一个词就该召回，不该被另一个词拖死')
+      assert.equal(r.results[0].title, '甲卡')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('一个词都不命中 → 照样 0 条（精度闸没丢）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '丙卡', content: '丙的内容。' })
+      const r = await call('memory_search', { query: '压根没有这词|也没有那词' })
+      assert.equal(r.total, 0, '完全不相干的卡不许混进来')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('命中越多分越高：OR 只是不淘汰，排序照旧', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '双中卡', content: '甲和乙都在这里。' })
+      await call('memory_save', { title: '单中卡', content: '只有甲。' })
+      const r = await call('memory_search', { query: '甲|乙' })
+      assert.equal(r.total, 2)
+      assert.equal(r.results[0].title, '双中卡', '两个词都命中的该排前面')
+    } finally {
+      fs.rmSync(lib.dir, { recursive: true, force: true })
+    }
+  })
+
+  it('aliases 进打分：改名后用旧标题也搜得到（不再是「读得到搜不到」）', async () => {
+    const { lib, call } = fresh()
+    try {
+      await call('memory_save', { title: '旧检索名', content: '正文里没有那三个字。', keywords: '无关词' })
+      await call('memory_update', { title: '旧检索名', mode: 'rename', newTitle: '新检索名' })
+      const r = await call('memory_search', { query: '旧检索名' })
+      assert.equal(r.total, 1, '旧标题留在 aliases 里，就该搜得到')
+      assert.equal(r.results[0].title, '新检索名')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
