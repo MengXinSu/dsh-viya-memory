@@ -213,7 +213,7 @@ describe('frontmatter 解析与生成', () => {
   it('标量：需要引号的加引号，数字/布尔裸写', () => {
     assert.equal(I.yamlScalar('abc'), 'abc')
     assert.equal(I.yamlScalar('hello world'), 'hello world')
-    assert.equal(I.yamlScalar('03-Knowledge'), '03-Knowledge')
+    assert.equal(I.yamlScalar('知识'), '知识')
     assert.equal(I.yamlScalar('123'), "'123'")
     assert.equal(I.yamlScalar('true'), "'true'")
     assert.equal(I.yamlScalar('a: b'), "'a: b'")
@@ -225,7 +225,7 @@ describe('frontmatter 解析与生成', () => {
   it('往返：serialize → parse 字段全对', () => {
     const card = {
       formatVersion: 1,
-      kind: '03-Knowledge',
+      kind: '知识',
       title: '测试卡：带冒号与 "引号"',
       tags: ['技术', 'DSH'],
       keywords: ['mtime', '并发写冲突', 'concurrency'],
@@ -242,7 +242,7 @@ describe('frontmatter 解析与生成', () => {
       ],
       body: '这是正文。\n\n## 小节\n\n带 [[另一张卡]] 的双链。',
     }
-    const back = I.parseCard(I.serializeCard(card), path.join('/lib', '03-Knowledge', 'x.md'))
+    const back = I.parseCard(I.serializeCard(card), path.join('/lib', '知识', 'x.md'))
     assert.equal(back.title, card.title)
     assert.deepEqual(back.tags, card.tags)
     assert.deepEqual(back.keywords, card.keywords)
@@ -269,7 +269,7 @@ describe('frontmatter 解析与生成', () => {
       '',
       '而 [[真目标]] 才算。',
     ].join('\n')
-    const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/03-Knowledge/t.md')
+    const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/知识/t.md')
     assert.deepEqual(card.links.map(l => l.target), ['真目标'], '只该留下代码外的真链接')
     assert.equal(I.stripCode('`[[a]]`'), ' ')
     assert.equal(I.stripCode('前 `[[a]]` 后').includes('[['), false)
@@ -277,22 +277,22 @@ describe('frontmatter 解析与生成', () => {
 
   it('正文里的 [[双链]] 会被算成关系边（related）', () => {
     const body = '见 [[旧卡的标题]] 和 [[另一张|显示名]]。'
-    const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/03-Knowledge/t.md')
+    const card = I.parseCard(`---\ntitle: t\ntags: []\nkeywords: []\n---\n\n${body}`, '/x/知识/t.md')
     const targets = card.links.map(l => l.target).sort()
     assert.deepEqual(targets, ['另一张', '旧卡的标题'])
     assert.ok(card.links.every(l => l.type === 'related'))
   })
 
   it('无 frontmatter 的文件也能解析（手写卡不炸）', () => {
-    const card = I.parseCard('只有正文，没有 frontmatter。', '/x/03-Knowledge/手写卡.md')
+    const card = I.parseCard('只有正文，没有 frontmatter。', '/x/知识/手写卡.md')
     assert.equal(card.title, '手写卡')
     assert.equal(card.body, '只有正文，没有 frontmatter。')
-    assert.equal(card.kind, '03-Knowledge', 'kind 应从目录名回落')
+    assert.equal(card.kind, '知识', 'kind 应从目录名回落')
   })
 
   it('BOM 与 CRLF 不破坏解析', () => {
     const raw = '\uFEFF---\r\ntitle: CRLF 卡\r\ntags: [a]\r\n---\r\n\r\n正文\r\n'
-    const card = I.parseCard(raw, '/x/03-Knowledge/c.md')
+    const card = I.parseCard(raw, '/x/知识/c.md')
     assert.equal(card.title, 'CRLF 卡')
     assert.equal(card.body.trim(), '正文')
   })
@@ -316,36 +316,36 @@ describe('slug 与 kind 匹配', () => {
   const kinds = new Set(I.KINDS.map(([d]) => d))
 
   it('闸1 精确：目录名与短名', () => {
-    assert.equal(I.matchKind('08-Mistakes', kinds), '08-Mistakes')
-    assert.equal(I.matchKind('mistakes', kinds), '08-Mistakes')
-    assert.equal(I.matchKind('Mistakes', kinds), '08-Mistakes')
+    assert.equal(I.matchKind('错误总结', kinds), '错误总结')
+    assert.equal(I.matchKind('mistakes', kinds), '错误总结')
+    assert.equal(I.matchKind('Mistakes', kinds), '错误总结')
     assert.equal(I.matchKind('', kinds), I.DEFAULT_KIND, '空 kind 落默认目录')
   })
 
   it('闸2 归一化：忽略大小写/连字符/下划线', () => {
-    assert.equal(I.matchKind('MISTAKE', kinds), '08-Mistakes')
-    assert.equal(I.matchKind('08_mistakes', kinds), '08-Mistakes')
-    assert.equal(I.matchKind('08 mistakes', kinds), '08-Mistakes')
+    assert.equal(I.matchKind('MISTAKE', kinds), '错误总结')
+    assert.equal(I.matchKind('MISTAKE_CARD', kinds), '错误总结')
+    assert.equal(I.matchKind('MISTAKE CARD', kinds), '错误总结')
   })
 
   it('闸3 近似：互为子串', () => {
-    assert.equal(I.matchKind('mistake-card', kinds), '08-Mistakes')
-    assert.equal(I.matchKind('knowledge-base', kinds), '03-Knowledge')
+    assert.equal(I.matchKind('mistake-card', kinds), '错误总结')
+    assert.equal(I.matchKind('知识库', kinds), '知识')
   })
 
   it('三道都不中 → undefined（交给调用方建目录）', () => {
     assert.equal(I.matchKind('量子纠缠笔记', kinds), undefined)
   })
 
-  it('建新目录用 NN-slug 且只建一级，编号递增', () => {
+  it('建新目录：不带编号，重名加后缀，且只建一级', () => {
     const { dir } = tempLibrary()
-    fs.mkdirSync(path.join(dir, '08-Mistakes'), { recursive: true })
+    fs.mkdirSync(path.join(dir, '错误总结'), { recursive: true })
     const made = I.createKindDir(dir, new Set([...kinds]), '量子笔记')
-    assert.equal(made, '09-量子笔记')
+    assert.equal(made, '量子笔记')
     assert.ok(fs.existsSync(path.join(dir, made)))
     assert.ok(fs.statSync(path.join(dir, made)).isDirectory())
     const again = I.createKindDir(dir, new Set([...kinds, made]), 'second thing')
-    assert.equal(again, '10-Second-thing')
+    assert.equal(again, 'second-thing')
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
@@ -513,11 +513,11 @@ describe('工具真实调用（临时库）', () => {
       importance: 4,
     })
     assert.equal(r.words > 0, true)
-    const file = path.join(lib.dir, '03-Knowledge', '并发写冲突.md')
+    const file = path.join(lib.dir, '知识', '并发写冲突.md')
     assert.ok(fs.existsSync(file), `应落在 ${file}`)
     const raw = fs.readFileSync(file, 'utf8')
     assert.ok(raw.startsWith('---\nformatVersion: 1\n'))
-    assert.ok(raw.includes('kind: 03-Knowledge'))
+    assert.ok(raw.includes('kind: 知识'))
     assert.ok(raw.includes('importance: 4'))
     assert.ok(raw.includes('mtime'))
     const parsed = I.parseCard(raw, file)
@@ -527,13 +527,13 @@ describe('工具真实调用（临时库）', () => {
   })
 
   it('memory_save 撞同名且高度重合 → 跳过不写', async () => {
-    const before = fs.readFileSync(path.join(lib.dir, '03-Knowledge', '并发写冲突.md'), 'utf8')
+    const before = fs.readFileSync(path.join(lib.dir, '知识', '并发写冲突.md'), 'utf8')
     const r = await call('memory_save', {
       title: '并发写冲突',
       content: '写入前比 mtime，外部改过就拒绝覆盖。',
     })
     assert.ok(r.action.includes('跳过'), `应跳过，实际：${r.action}`)
-    assert.equal(fs.readFileSync(path.join(lib.dir, '03-Knowledge', '并发写冲突.md'), 'utf8'), before, '文件不该被动')
+    assert.equal(fs.readFileSync(path.join(lib.dir, '知识', '并发写冲突.md'), 'utf8'), before, '文件不该被动')
   })
 
   it('memory_save 撞同名但真有补充 → 另起 ## 更新 节，报警字数', async () => {
@@ -542,7 +542,7 @@ describe('工具真实调用（临时库）', () => {
       content: '补充：跨进程场景另有风险，尚未处理。',
     })
     assert.ok(r.action.includes('追加更新节'), `应追加，实际：${r.action}`)
-    const raw = fs.readFileSync(path.join(lib.dir, '03-Knowledge', '并发写冲突.md'), 'utf8')
+    const raw = fs.readFileSync(path.join(lib.dir, '知识', '并发写冲突.md'), 'utf8')
     assert.ok(raw.includes('## 更新 '), '必须成节，不是粘一段散字')
     assert.ok(raw.includes('补充：跨进程场景另有风险'), '新内容要在')
     assert.ok(raw.includes('写入前比 mtime'), '原内容不能丢')
@@ -581,13 +581,13 @@ describe('工具真实调用（临时库）', () => {
       () => call('memory_save', { title: '泄漏的密钥', content: 'key = sk-abcdefghijklmnopqrstuvwx' }),
       /敏感信息/,
     )
-    assert.ok(!fs.existsSync(path.join(lib.dir, '03-Knowledge', '泄漏的密钥.md')))
+    assert.ok(!fs.existsSync(path.join(lib.dir, '知识', '泄漏的密钥.md')))
   })
 
-  it('memory_save 未知 kind → 自动建 NN-slug 目录并报备', async () => {
+  it('memory_save 未知 kind → 自动建目录并报备', async () => {
     const r = await call('memory_save', { title: '一张野生卡', content: '内容足够不同的一堆字。', kind: '量子笔记' })
     assert.ok(r.action.includes('已新建目录'), `要报备新目录，实际：${r.action}`)
-    assert.ok(fs.existsSync(path.join(lib.dir, '09-量子笔记', '一张野生卡.md')))
+    assert.ok(fs.existsSync(path.join(lib.dir, '量子笔记', '一张野生卡.md')))
   })
 
   it('memory_search 能搜到标题命中并按分排序', async () => {
@@ -715,7 +715,7 @@ describe('工具真实调用（临时库）', () => {
     const both = ['标签1,标签2', '普通']
     const host = I.parseCard(
       I.serializeCard({ title: '逗号卡', tags: both, keywords: ['k1,k2'], body: 'x' }),
-      '/x/03-Knowledge/t.md',
+      '/x/知识/t.md',
     )
     assert.deepEqual(host.tags, both, '标签被逗号劈开了')
     assert.deepEqual(host.keywords, ['k1,k2'], '关键词被逗号劈开了')
@@ -741,7 +741,7 @@ describe('工具真实调用（临时库）', () => {
         links: [{ target: 'B', type: 'contradicts', weight: 0.9, description: '带,逗号 与 \'单引号\'' }],
         body: 'x',
       }),
-      '/x/03-Knowledge/a.md',
+      '/x/知识/a.md',
     )
     const edge = card.links.find(l => l.target === 'B')
     assert.equal(edge.type, 'contradicts', '关系类型被逗号吃掉了')
@@ -763,7 +763,7 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(same.status, 'already-linked', '完全重复的边应当跳过')
     const keep = I.parseCard(
       fs.readFileSync((await call('memory_read', { title: '边测试A' })).path, 'utf8'),
-      '/x/03-Knowledge/a.md',
+      '/x/知识/a.md',
     )
     assert.equal(keep.links.find(l => l.target === '边测试B').weight, 0.8, '没给 weight 却被覆盖了')
 
@@ -772,7 +772,7 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(change.status, 'updated', '同一对卡应当能改关系类型')
     const after = I.parseCard(
       fs.readFileSync((await call('memory_read', { title: '边测试B' })).path, 'utf8'),
-      '/x/03-Knowledge/b.md',
+      '/x/知识/b.md',
     )
     assert.equal(after.links.find(l => l.target === '边测试A').type, 'contradicts')
     assert.ok(after.body.includes('> contradicts:'), '正文 callout 必须跟着换成新类型')
@@ -782,9 +782,9 @@ describe('工具真实调用（临时库）', () => {
   // 2026-09-27：Obsidian 里手写 `tags: 技术`（标量）会被旧代码当非数组**整组丢掉**，
   // 而且下一次写入会把字段彻底抹平；`keywords: a, b` 同理。
   it('tags/keywords 写成标量也不丢（兼容手写卡）', () => {
-    const one = I.parseCard('---\ntitle: t\ntags: 技术\n---\n正文', '/x/03-Knowledge/t.md')
+    const one = I.parseCard('---\ntitle: t\ntags: 技术\n---\n正文', '/x/知识/t.md')
     assert.deepEqual(one.tags, ['技术'], '单个标量标签不该丢')
-    const many = I.parseCard('---\ntitle: t\nkeywords: mtime, 并发, 冲突\n---\n正文', '/x/03-Knowledge/t.md')
+    const many = I.parseCard('---\ntitle: t\nkeywords: mtime, 并发, 冲突\n---\n正文', '/x/知识/t.md')
     assert.deepEqual(many.keywords, ['mtime', '并发', '冲突'], '逗号分隔的标量关键词不该丢')
     assert.deepEqual(I.asStringList(undefined), [])
     assert.deepEqual(I.asStringList(['a', ' ', 'b']), ['a', 'b'], '数组里的空项要清掉')
@@ -797,7 +797,7 @@ describe('工具真实调用（临时库）', () => {
     assert.equal(I.flattenLine('a\r\nb\r\n'), 'a b')
     const card = I.parseCard(
       I.serializeCard({ title: 't', tags: ['ok', 'a\nb'], keywords: ['x\ny'], body: 'b' }),
-      '/x/03-Knowledge/t.md',
+      '/x/知识/t.md',
     )
     assert.deepEqual(card.tags, ['ok', 'a b'], '带换行的标签把整组写坏了')
     assert.deepEqual(card.keywords, ['x y'])
@@ -843,9 +843,9 @@ describe('工具真实调用（临时库）', () => {
   // memory_forget 是会真把文件搬进 _trashed 的。
   it('库内相对路径可读；相对路径不许越出库根', async () => {
     await call('memory_save', { title: '库内卡', content: '库内卡内容独立。', kind: 'projects' })
-    const relPath = path.join(lib.dir, '02-Projects', '库内卡.md')
+    const relPath = path.join(lib.dir, '项目', '库内卡.md')
     assert.equal(fs.existsSync(relPath), true, '前置条件：文件确实在库内')
-    const got = await call('memory_read', { title: '02-Projects/库内卡.md' })
+    const got = await call('memory_read', { title: '项目/库内卡.md' })
     assert.ok(got.body.includes('库内卡内容独立'), '库内相对路径应当能读到')
 
     const outside = path.join(path.dirname(lib.dir), 'outside-probe.md')
@@ -943,7 +943,7 @@ describe('工具真实调用（临时库）', () => {
     // 至少两个目录、且总数与分布一致（这是体检的核心：分布要可信）
     assert.ok(r.kinds.length >= 2, `应至少有两个目录，实际 ${JSON.stringify(r.kinds)}`)
     assert.equal(r.kinds.reduce((n, k) => n + k.count, 0), r.total, '分布总数必须等于总卡数')
-    assert.ok(r.kinds.some(k => k.dir === '08-Mistakes' && k.count >= 1), '08-Mistakes 应有卡')
+    assert.ok(r.kinds.some(k => k.dir === '错误总结' && k.count >= 1), '错误总结 应有卡')
     assert.ok(r.deadLinks.some(l => l.includes('一张不存在的卡')), '死链要报出来')
     assert.equal(typeof r.trashed, 'number')
     assert.equal(typeof r.externalLinks, 'number', '库外链接计数必须存在')
@@ -954,13 +954,13 @@ describe('工具真实调用（临时库）', () => {
   it('memory_stats 不把「指向库外的链接」误报成死链，库内错链照报', async () => {
     await call('memory_save', {
       title: '带库外链接的卡',
-      content: '见 [[技术/2026-09-28-viya-memory-改造与踩坑交接]]，以及 [[02-Projects/库里根本没有这张卡]]。',
+      content: '见 [[技术/2026-09-28-viya-memory-改造与踩坑交接]]，以及 [[项目/库里根本没有这张卡]]。',
       kind: 'mistakes',
     })
     const r = await call('memory_stats', {})
     assert.equal(r.externalLinks, 1, `库外那 1 条应单独计数，实际 ${r.externalLinks}`)
     assert.ok(!r.deadLinks.some(l => l.includes('技术/')), `库外链接不许进死链，实际：${JSON.stringify(r.deadLinks)}`)
-    assert.ok(r.deadLinks.some(l => l.includes('02-Projects/库里根本没有这张卡')),
+    assert.ok(r.deadLinks.some(l => l.includes('项目/库里根本没有这张卡')),
       `库内目录前缀 + 卡不存在 = 真死链，必须照报，实际：${JSON.stringify(r.deadLinks)}`)
 
     // 反面：不带路径的纯标题写错 → 依旧是真死链（不能被「库外」这条豁免吃掉）
@@ -974,12 +974,12 @@ describe('工具真实调用（临时库）', () => {
   // 而匹配集合当时只装标题 → 明明在库里的卡被判成死链。Obsidian 按文件名解析，它那边是绿的。
   it('memory_stats：按文件名写的库内链接不算死链（标题与文件名不一致）', async () => {
     await call('memory_save', { title: '标题里有 空格 的卡', content: '正文内容与其它卡都不同，用于文件名解析测试。', kind: 'mistakes' })
-    const file = fs.readdirSync(path.join(lib.dir, '08-Mistakes')).find(f => f.startsWith('标题里有'))
+    const file = fs.readdirSync(path.join(lib.dir, '错误总结')).find(f => f.startsWith('标题里有'))
     assert.ok(file, '前提：铺底卡应已落盘')
     const base = path.basename(file, '.md')
     assert.notEqual(base, '标题里有 空格 的卡', '前提：文件名必须与标题真的不同，否则这条测试没有区分力')
 
-    await call('memory_save', { title: '按文件名引用的卡', content: `指向 [[08-Mistakes/${base}]]，不该被判成断链。`, kind: 'mistakes' })
+    await call('memory_save', { title: '按文件名引用的卡', content: `指向 [[错误总结/${base}]]，不该被判成断链。`, kind: 'mistakes' })
     const r = await call('memory_stats', {})
     assert.ok(!r.deadLinks.some(l => l.includes(base)),
       `按文件名写的库内链接不许判死链，实际：${JSON.stringify(r.deadLinks)}`)
@@ -988,13 +988,13 @@ describe('工具真实调用（临时库）', () => {
   // 2026-09-28 事故后加的硬闸：不传 confirm 一律不落手。
   // 背景：误删的根因不是「不知道规矩」，而是「执行时没人拦」——提示词约束不了执行者。
   it('memory_forget 不传 confirm → 只预览，一个字节都不动', async () => {
-    const before = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '带死链的卡.md'), 'utf8')
+    const before = fs.readFileSync(path.join(lib.dir, '错误总结', '带死链的卡.md'), 'utf8')
     const p = await call('memory_forget', { title: '带死链的卡' })
     assert.equal(p.mode, 'preview', '缺省必须只预览')
     assert.ok(p.path.includes('带死链的卡'), '预览要给出目标路径')
     assert.ok(Number.isInteger(p.referrers), '要报告有多少卡引用了它')
     // 关键断言：预览之后磁盘必须**逐字节**不变
-    const after = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '带死链的卡.md'), 'utf8')
+    const after = fs.readFileSync(path.join(lib.dir, '错误总结', '带死链的卡.md'), 'utf8')
     assert.equal(after, before, '预览绝不许动文件')
     const stillThere = await call('memory_search', { query: '死链' })
     assert.ok(stillThere.returned > 0, '预览后卡片仍应被检索到')
@@ -1006,7 +1006,7 @@ describe('工具真实调用（临时库）', () => {
     assert.ok(r.path.includes('_trashed'), `应落进回收站，实际 ${r.path}`)
     assert.ok(fs.existsSync(r.path))
     assert.ok(fs.readFileSync(r.path, 'utf8').includes('status: deleted'))
-    assert.ok(!fs.existsSync(path.join(lib.dir, '08-Mistakes', '带死链的卡.md')), '原位置要清掉')
+    assert.ok(!fs.existsSync(path.join(lib.dir, '错误总结', '带死链的卡.md')), '原位置要清掉')
   })
 
   it('memory_forget 软删后不该被检索到', async () => {
@@ -1254,12 +1254,12 @@ describe('渲染层分支覆盖（变异扫描补）', () => {
       returned: 1,
       degraded: 0,
       results: [{
-        title: '卡片标题', path: 'C:\\lib\\x.md', kind: '03-Knowledge',
+        title: '卡片标题', path: 'C:\\lib\\x.md', kind: '知识',
         updated: '2026-09-28', summary: '摘要文字', hasImage: true, score: 3,
       }],
     })
     assert.ok(out.includes('命中 7 张，返回 1 张'), `命中行要报总数与返回数，实际：${out}`)
-    for (const piece of ['卡片标题', '03-Knowledge', 'C:\\lib\\x.md', '摘要文字', '📎']) {
+    for (const piece of ['卡片标题', '知识', 'C:\\lib\\x.md', '摘要文字', '📎']) {
       assert.ok(out.includes(piece), `缺 ${piece}，实际：${out}`)
     }
   })
@@ -1331,10 +1331,10 @@ describe('渲染层分支覆盖（变异扫描补）', () => {
       oversized: ['超长卡（5000 字）'],
       deadLinks: ['A → [[没有的卡]]'],
       externalLinks: 3,
-      kinds: [{ dir: '03-Knowledge', count: 5 }],
+      kinds: [{ dir: '知识', count: 5 }],
     })
     assert.ok(out.includes('各目录分布'), `缺分布段，实际：${out}`)
-    assert.ok(out.includes('03-Knowledge: 5 张'), `分布行不对：${out}`)
+    assert.ok(out.includes('知识: 5 张'), `分布行不对：${out}`)
     assert.ok(out.includes('超长卡（5000 字）'), '缺超长卡条目')
     assert.ok(out.includes('A → [[没有的卡]]'), '缺死链条目')
     assert.ok(out.includes('库外链接：3 条'), '缺库外链接计数')
@@ -1378,7 +1378,7 @@ describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
     const again = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related', weight: 0.9 })
     assert.equal(again.status, 'updated', '同类型但权重变了，必须是 updated，不是 already-linked')
 
-    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '连边甲.md'), 'utf8')
+    const raw = fs.readFileSync(path.join(lib.dir, '错误总结', '连边甲.md'), 'utf8')
     assert.ok(raw.includes('weight: 0.9'), `新权重必须落盘，实际：${raw}`)
   })
 
@@ -1394,7 +1394,7 @@ describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
   it('memory_link 不传 weight → 已有边的权重不被改写', async () => {
     const r = await call('memory_link', { source: '连边甲', target: '连边乙', type: 'related' })
     assert.equal(r.status, 'already-linked', '没说就是没说，不该动已有边')
-    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '连边甲.md'), 'utf8')
+    const raw = fs.readFileSync(path.join(lib.dir, '错误总结', '连边甲.md'), 'utf8')
     assert.ok(raw.includes('weight: 0.9'), `权重必须还是 0.9，实际：${raw}`)
   })
 
@@ -1460,7 +1460,7 @@ describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
       () => call('memory_update', { title: '待脱敏的卡', content: 'key = sk-abcdefghijklmnopqrstuvwx' }),
       /敏感信息/,
     )
-    const raw = fs.readFileSync(path.join(lib.dir, '08-Mistakes', '待脱敏的卡.md'), 'utf8')
+    const raw = fs.readFileSync(path.join(lib.dir, '错误总结', '待脱敏的卡.md'), 'utf8')
     assert.ok(!raw.includes('sk-abcdefghijklmnopqrstuvwx'), '拒绝之后盘上不能留下这串密钥')
     assert.ok(raw.includes('正常内容'), '被拒的那次不能把原正文弄丢')
   })
@@ -1468,9 +1468,9 @@ describe('变异扫描补测：真盲区回填（2026-09-28）', () => {
   // 变异点：`if (words > hardLimit)` 恒假 → 体检不再报告超长卡。
   // 长度闸在写入侧挡住了超长卡，所以这里直接落盘一张，专门喂给体检。
   it('memory_stats 要报告超长卡（> 硬限）', async () => {
-    await call('memory_save', { title: '正常卡', content: '正常长度的内容。' }) // 默认落 03-Knowledge，顺带把目录建出来
-    const file = path.join(lib.dir, '03-Knowledge', '手写的超长卡.md')
-    fs.writeFileSync(file, `---\nformatVersion: 1\ntitle: 手写的超长卡\nkind: 03-Knowledge\n---\n\n${'字'.repeat(4200)}\n`, 'utf8')
+    await call('memory_save', { title: '正常卡', content: '正常长度的内容。' }) // 默认落 知识，顺带把目录建出来
+    const file = path.join(lib.dir, '知识', '手写的超长卡.md')
+    fs.writeFileSync(file, `---\nformatVersion: 1\ntitle: 手写的超长卡\nkind: 知识\n---\n\n${'字'.repeat(4200)}\n`, 'utf8')
 
     const r = await call('memory_stats', {})
     assert.ok(r.oversized.some(o => o.includes('手写的超长卡')), `超长卡必须被报出来，实际：${JSON.stringify(r.oversized)}`)
@@ -1560,7 +1560,7 @@ describe('审查修复①：回收站与保留目录隔离', () => {
       await call('memory_save', { title: 'T2', content: '乙卡内容，独立。' })
       const gone = await call('memory_forget', { title: 'T1', confirm: true })
       const trashedBefore = fs.readFileSync(gone.path, 'utf8')
-      const t2Before = fs.readFileSync(path.join(lib.dir, '03-Knowledge', 'T2.md'), 'utf8')
+      const t2Before = fs.readFileSync(path.join(lib.dir, '知识', 'T2.md'), 'utf8')
 
       await assert.rejects(() => call('memory_update', { title: 'T1', importance: 5 }), /不存在/)
       await assert.rejects(() => call('memory_link', { source: 'T2', target: 'T1' }), /不存在/)
@@ -1570,7 +1570,7 @@ describe('审查修复①：回收站与保留目录隔离', () => {
       assert.equal(again.mode, 'not-found', '已在回收站的卡不能再软删一次')
 
       assert.equal(fs.readFileSync(gone.path, 'utf8'), trashedBefore, '回收站那份一字不动')
-      assert.equal(fs.readFileSync(path.join(lib.dir, '03-Knowledge', 'T2.md'), 'utf8'), t2Before, '不许留下单向边')
+      assert.equal(fs.readFileSync(path.join(lib.dir, '知识', 'T2.md'), 'utf8'), t2Before, '不许留下单向边')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
@@ -1607,13 +1607,13 @@ describe('审查修复③：forget 预览引用计数口径', () => {
     try {
       await call('memory_save', { title: '被 引用 卡', content: '被引用的卡内容，独立。' })
       await call('memory_save', { title: '引用者一', content: '按文件名 [[被-引用-卡]]，一。' })
-      await call('memory_save', { title: '引用者二', content: '带目录 [[03-Knowledge/被-引用-卡]]，二。' })
+      await call('memory_save', { title: '引用者二', content: '带目录 [[知识/被-引用-卡]]，二。' })
       await call('memory_save', { title: '引用者三', content: '按标题 [[被 引用 卡]]，三。' })
       await call('memory_save', { title: '引用者四', content: '带锚点别名 [[被 引用 卡#小节|看这里]]，四。' })
-      await call('memory_save', { title: '干扰甲', content: '目录不对 [[08-Mistakes/被-引用-卡]]，甲。' })
+      await call('memory_save', { title: '干扰甲', content: '目录不对 [[错误总结/被-引用-卡]]，甲。' })
       await call('memory_save', { title: '干扰乙', content: '别的卡 [[引用者一]]，乙。' })
       // 末段恰好是标题、目录却不对：必须不算（M10 变异「前缀不校验」只有这条能抓）
-      await call('memory_save', { title: '干扰丙', content: '目录不对但末段是标题 [[08-Mistakes/被 引用 卡]]，丙。' })
+      await call('memory_save', { title: '干扰丙', content: '目录不对但末段是标题 [[错误总结/被 引用 卡]]，丙。' })
       const p = await call('memory_forget', { title: '被 引用 卡' })
       assert.equal(p.mode, 'preview')
       assert.equal(p.referrers, 4, `应为 4（一二三四），实际 ${p.referrers}`)
@@ -1623,13 +1623,13 @@ describe('审查修复③：forget 预览引用计数口径', () => {
   })
 
   it('linkPointsTo 单元：大小写不敏感、.md 后缀、反斜杠', () => {
-    const card = { title: 'Foo Bar', path: path.join('X', '03-Knowledge', 'Foo-Bar.md') }
+    const card = { title: 'Foo Bar', path: path.join('X', '知识', 'Foo-Bar.md') }
     assert.equal(I.linkPointsTo('foo bar', card), true)
     assert.equal(I.linkPointsTo('Foo-Bar.md', card), true)
-    assert.equal(I.linkPointsTo('03-Knowledge\\Foo-Bar', card), true)
-    assert.equal(I.linkPointsTo('03-Knowledge/Foo Bar', card), true)
-    assert.equal(I.linkPointsTo('02-Projects/Foo-Bar', card), false)
-    assert.equal(I.linkPointsTo('02-Projects/Foo Bar', card), false, '末段是标题但目录不对，不算')
+    assert.equal(I.linkPointsTo('知识\\Foo-Bar', card), true)
+    assert.equal(I.linkPointsTo('知识/Foo Bar', card), true)
+    assert.equal(I.linkPointsTo('项目/Foo-Bar', card), false)
+    assert.equal(I.linkPointsTo('项目/Foo Bar', card), false, '末段是标题但目录不对，不算')
     assert.equal(I.linkPointsTo('Foo', card), false)
     assert.equal(I.linkPointsTo('', card), false)
   })
@@ -1681,13 +1681,13 @@ describe('审查修复②：未知 frontmatter 字段原样保留', () => {
 
   it('已知字段不会被当成未知字段重复写出', () => {
     const src = '---\ntitle: T\ntags:\n  - a\nlinks:\n  - {target: X, type: related, weight: 0.7, description: \'\'}\naliases: [q]\n---\n\nbody'
-    const card = I.parseCard(src, 'x/03-Knowledge/T.md')
+    const card = I.parseCard(src, 'x/知识/T.md')
     assert.deepEqual(card.extraFrontmatter, ['aliases: [q]'])
     const out = I.serializeCard(card)
     assert.equal(out.split('tags:').length - 1, 1, 'tags 只能出现一次')
     assert.equal(out.split('links:').length - 1, 1, 'links 只能出现一次')
     // 往返稳定：再解析一次，未知字段不变
-    assert.deepEqual(I.parseCard(out, 'x/03-Knowledge/T.md').extraFrontmatter, ['aliases: [q]'])
+    assert.deepEqual(I.parseCard(out, 'x/知识/T.md').extraFrontmatter, ['aliases: [q]'])
   })
 })
 
@@ -1773,14 +1773,14 @@ describe('审查修复④：save 只写库内一级卡目录', () => {
         path.join(lib.dir, '根上的卡'),
         path.join(lib.dir, '_trashed', '回收站里的卡'),
         path.join(lib.dir, '.obsidian', '配置里的卡'),
-        path.join(lib.dir, '03-Knowledge', '.hidden', '保留子目录里的卡'),
-        path.join(lib.dir, '03-Knowledge', ...Array.from({ length: 9 }, (_, i) => `d${i}`), '过深的卡'),
+        path.join(lib.dir, '知识', '.hidden', '保留子目录里的卡'),
+        path.join(lib.dir, '知识', ...Array.from({ length: 9 }, (_, i) => `d${i}`), '过深的卡'),
       ]
       for (const p of bad) {
         await assert.rejects(() => call('memory_save', { title: p, content: '不该落盘的内容，独立。' }), /拒绝写入/, `应拒绝：${p}`)
         assert.equal(fs.existsSync(`${p}.md`), false, `不能落盘：${p}`)
       }
-      const good = path.join(lib.dir, '03-Knowledge', '绝对路径卡')
+      const good = path.join(lib.dir, '知识', '绝对路径卡')
       const r = await call('memory_save', { title: good, content: '一级卡目录里的绝对路径，允许。' })
       assert.equal(r.path, `${good}.md`)
       assert.ok(fs.existsSync(r.path))
@@ -1888,21 +1888,21 @@ describe('审查修复⑥：kind 跟随实际目录 / 块式列表剥引号 / �
       const again = await call('memory_save', { title: 'K卡', content: '完全不同的补充说明子丑寅卯辰巳' })
       assert.ok(again.action.startsWith('追加'), `应走追加，实际 ${again.action}`)
       const raw = fs.readFileSync(r.path, 'utf8')
-      assert.ok(raw.includes('kind: 08-Mistakes'), `kind 必须仍是 08-Mistakes，实际：\n${raw.split('\n---\n')[0]}`)
-      assert.ok(!raw.includes('kind: 03-Knowledge'), 'kind 不能被缺省值改写')
+      assert.ok(raw.includes('kind: 错误总结'), `kind 必须仍是 错误总结，实际：\n${raw.split('\n---\n')[0]}`)
+      assert.ok(!raw.includes('kind: 知识'), 'kind 不能被缺省值改写')
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
     }
   })
 
   it('块式列表项的引号被剥掉（B9）', () => {
-    const card = I.parseCard("---\ntitle: T\ntags:\n  - '技术'\n  - \"DSH\"\n  - 裸写\nkeywords:\n  - 'a, b'\n---\nbody", 'x/03-Knowledge/T.md')
+    const card = I.parseCard("---\ntitle: T\ntags:\n  - '技术'\n  - \"DSH\"\n  - 裸写\nkeywords:\n  - 'a, b'\n---\nbody", 'x/知识/T.md')
     assert.deepEqual(card.tags, ['技术', 'DSH', '裸写'])
     assert.deepEqual(card.keywords, ['a, b'], '引号里的逗号是内容，不是分隔符')
   })
 
   it('块式 links 仍能解析（剥引号不误伤 {…} 对象）', () => {
-    const card = I.parseCard("---\ntitle: T\nlinks:\n  - {target: X, type: explains, weight: 0.8, description: '说明, 带逗号'}\n  - 'Y'\n---\nbody", 'x/03-Knowledge/T.md')
+    const card = I.parseCard("---\ntitle: T\nlinks:\n  - {target: X, type: explains, weight: 0.8, description: '说明, 带逗号'}\n  - 'Y'\n---\nbody", 'x/知识/T.md')
     const byTarget = Object.fromEntries(card.links.map(l => [l.target, l]))
     assert.equal(byTarget.X?.type, 'explains')
     assert.equal(byTarget.X?.description, '说明, 带逗号')
@@ -1961,7 +1961,7 @@ describe('安全测验修复', () => {
       await assert.rejects(() => call('memory_save', { title: 'T1', content: '正常', tags: ['ghp_abcdefghijklmnopqrstuvwxyz1234'] }), /tags命中敏感信息/)
       await assert.rejects(() => call('memory_save', { title: 'T2', content: '正常', keywords: 'AKIAABCDEFGHIJKLMNOP' }), /keywords命中敏感信息/)
       await assert.rejects(() => call('memory_save', { title: 'T3', content: '正常', links: ['sk-abcdefghijklmnopqrstuvwx'] }), /links命中敏感信息/)
-      const kd = path.join(lib.dir, '03-Knowledge')
+      const kd = path.join(lib.dir, '知识')
       assert.ok(!fs.existsSync(kd) || fs.readdirSync(kd).length === 0, '被拒的都不能落盘')
       await call('memory_save', { title: '甲卡', content: '甲的正文，独立。' })
       await call('memory_save', { title: '乙卡', content: '乙的正文，独立。' })
@@ -2124,7 +2124,7 @@ describe('工具调用体验修复', () => {
       const r = await call('memory_save', { title: '把 * 翻成 .* 正则：为什么？', content: '内容，独立。' })
       assert.equal(path.basename(r.path), '把-＊-翻成-.＊-正则：为什么？.md')
       // 老卡：旧 slug 规则落盘的文件名
-      const old = path.join(lib.dir, '03-Knowledge', '旧-规则-卡.md')
+      const old = path.join(lib.dir, '知识', '旧-规则-卡.md')
       fs.writeFileSync(old, '---\ntitle: \'旧 * 规则 卡\'\n---\n\n旧卡正文。\n', 'utf8')
       const read = await call('memory_read', { title: '旧 * 规则 卡' })
       assert.equal(read.found, true, '老文件名的卡按标题必须还能读到')
@@ -2144,28 +2144,29 @@ describe('子目录支持', () => {
     mod.apply(made.ctx, lib.config)
     return { lib, call: (name, args) => made.tools.get(name).execute(args, {}) }
   }
-  const card = (title, body) => `---\ntitle: '${title}'\ntags: [子]\n---\n\n${body}\n`
+  // 手写卡也要带一个卡专属字段，否则全库合一后会被 scope=cards 当笔记滤掉（那是设计如此）
+  const card = (title, body) => `---\nformatVersion: 1\ntitle: '${title}'\ntags: [子]\n---\n\n${body}\n`
 
   it('子目录里的卡：search / read / stats / update / link / forget 全都认，kind 记一级目录', async () => {
     const { lib, call } = fresh()
     try {
-      const sub = path.join(lib.dir, '03-Knowledge', '子文件夹', '更深')
+      const sub = path.join(lib.dir, '知识', '子文件夹', '更深')
       fs.mkdirSync(sub, { recursive: true })
       const f = path.join(sub, '深处卡.md')
       fs.writeFileSync(f, card('深处卡', '藏在子目录里的独特内容甲乙丙。'), 'utf8')
       // 保留子目录里的不算卡
-      fs.mkdirSync(path.join(lib.dir, '03-Knowledge', '.obsidian'), { recursive: true })
-      fs.writeFileSync(path.join(lib.dir, '03-Knowledge', '.obsidian', '隐藏.md'), card('隐藏', '独特内容甲乙丙。'), 'utf8')
+      fs.mkdirSync(path.join(lib.dir, '知识', '.obsidian'), { recursive: true })
+      fs.writeFileSync(path.join(lib.dir, '知识', '.obsidian', '隐藏.md'), card('隐藏', '独特内容甲乙丙。'), 'utf8')
       await call('memory_save', { title: '顶层卡', content: '顶层卡内容，独立。' })
       // 按绝对路径直取保留子目录里的文件：update / forget 都不能碰（M40：只查首段会放行）
-      const hidden = path.join(lib.dir, '03-Knowledge', '.obsidian', '隐藏.md')
+      const hidden = path.join(lib.dir, '知识', '.obsidian', '隐藏.md')
       await assert.rejects(() => call('memory_update', { title: hidden, importance: 5 }), /记忆不存在/)
       assert.equal((await call('memory_forget', { title: hidden, confirm: true })).mode, 'not-found')
       assert.ok(fs.existsSync(hidden) && !fs.readFileSync(hidden, 'utf8').includes('importance: 5'), '保留子目录文件必须原样')
 
       const s = await call('memory_search', { query: '独特内容' })
       assert.equal(s.total, 1, `只该命中子目录那张，实际 ${s.total}`)
-      assert.equal(s.results[0].kind, '03-Knowledge', `kind 要记一级目录，实际 ${s.results[0].kind}`)
+      assert.equal(s.results[0].kind, '知识', `kind 要记一级目录，实际 ${s.results[0].kind}`)
       assert.equal((await call('memory_read', { title: '深处卡' })).found, true)
 
       const st = await call('memory_stats', {})
@@ -2175,7 +2176,7 @@ describe('子目录支持', () => {
       assert.ok(fs.readFileSync(f, 'utf8').includes('importance: 5'), 'update 要原地写回子目录文件')
       const ap = await call('memory_save', { title: '深处卡', content: '完全不同的追加内容子丑寅卯辰。' })
       assert.equal(ap.path, f, '追加要写回原文件')
-      assert.ok(fs.readFileSync(f, 'utf8').includes('kind: 03-Knowledge'), 'kind 取一级目录，不是「更深」')
+      assert.ok(fs.readFileSync(f, 'utf8').includes('kind: 知识'), 'kind 取一级目录，不是「更深」')
 
       const l = await call('memory_link', { source: '顶层卡', target: '深处卡' })
       assert.equal(l.status, 'created')
@@ -2193,17 +2194,17 @@ describe('子目录支持', () => {
     const { lib, call } = fresh()
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'viya-subj-'))
     try {
-      const target = path.join(lib.dir, '03-Knowledge', '子', '路径卡')
+      const target = path.join(lib.dir, '知识', '子', '路径卡')
       const r = await call('memory_save', { title: target, content: '按路径写进子目录，独立。' })
       assert.equal(r.path, `${target}.md`)
       assert.equal((await call('memory_search', { query: '按路径写进子目录' })).total, 1, '写进去要搜得到')
 
       fs.writeFileSync(path.join(outside, '外.md'), card('库外junction卡', '不该被扫到的库外内容。'), 'utf8')
       let linked = true
-      try { fs.symlinkSync(outside, path.join(lib.dir, '03-Knowledge', 'j'), 'junction') } catch { linked = false }
+      try { fs.symlinkSync(outside, path.join(lib.dir, '知识', 'j'), 'junction') } catch { linked = false }
       if (linked) {
         assert.equal((await call('memory_search', { query: '不该被扫到' })).total, 0, 'junction 不能把库外卡带进来')
-        fs.unlinkSync(path.join(lib.dir, '03-Knowledge', 'j'))
+        fs.unlinkSync(path.join(lib.dir, '知识', 'j'))
       }
     } finally {
       for (const d of [outside, lib.dir]) fs.rmSync(d, { recursive: true, force: true })
@@ -2234,7 +2235,7 @@ describe('追加时的 occurred_at', () => {
 
 // 2026-09-28 边界探测：手写 YAML 的几种常见写法
 describe('手写 YAML 边界', () => {
-  const P = src => I.parseCard(src, 'x/03-Knowledge/T.md')
+  const P = src => I.parseCard(src, 'x/知识/T.md')
 
   it('行尾注释不算值（引号内的 # 与无空白的 # 是内容）', () => {
     const c = P("---\ntitle: E5 # 注释\ntags: [a, b] # 注释\nkeywords:\n  - 甲 # 注\n  - 'x # 不是注释'\nsource: a#b\n---\nbody")
@@ -2257,8 +2258,8 @@ describe('手写 YAML 边界', () => {
     mod.apply(made.ctx, lib.config)
     const call = (name, args) => made.tools.get(name).execute(args, {})
     try {
-      fs.mkdirSync(path.join(lib.dir, '03-Knowledge'), { recursive: true })
-      fs.writeFileSync(path.join(lib.dir, '03-Knowledge', 'E8.md'), '---\ntitle: E8\nstatus: Deleted\n---\n\n大写删除标记独特内容。\n', 'utf8')
+      fs.mkdirSync(path.join(lib.dir, '知识'), { recursive: true })
+      fs.writeFileSync(path.join(lib.dir, '知识', 'E8.md'), '---\ntitle: E8\nstatus: Deleted\n---\n\n大写删除标记独特内容。\n', 'utf8')
       assert.equal((await call('memory_search', { query: '大写删除标记' })).total, 0)
     } finally {
       fs.rmSync(lib.dir, { recursive: true, force: true })
@@ -2278,16 +2279,16 @@ describe('体检报重名卡', () => {
       fs.writeFileSync(path.join(lib.dir, dir, file), `---\ntitle: ${title}\n${extra}---\n\n${title} 正文。\n`, 'utf8')
     }
     try {
-      put('03-Knowledge', 'a.md', '同名卡')
-      put('08-Mistakes', 'b.md', '同名卡')
-      put('02-Projects', 'c.md', '同名卡', 'status: deleted\n')
-      put('02-Projects', 'd.md', 'Case卡')
-      put('08-Mistakes', 'e.md', 'case卡')
-      put('03-Knowledge', 'f.md', '独一张')
+      put('知识', 'a.md', '同名卡')
+      put('错误总结', 'b.md', '同名卡')
+      put('项目', 'c.md', '同名卡', 'status: deleted\n')
+      put('项目', 'd.md', 'Case卡')
+      put('错误总结', 'e.md', 'case卡')
+      put('知识', 'f.md', '独一张')
       const r = await call('memory_stats', {})
       assert.equal(r.duplicates.length, 2, `应为 2 组（同名卡 / case卡），实际 ${JSON.stringify(r.duplicates)}`)
       const g = r.duplicates.find(d => d.includes('同名卡'))
-      assert.ok(g && g.includes('03-Knowledge') && g.includes('08-Mistakes') && !g.includes('02-Projects'), `要列出两处位置且不含已删：${g}`)
+      assert.ok(g && g.includes('知识') && g.includes('错误总结') && !g.includes('项目'), `要列出两处位置且不含已删：${g}`)
       assert.ok(!r.duplicates.some(d => d.includes('独一张')))
       const out = made.tools.get('memory_stats').output.render({}, r).map(b => b.text).join('\n')
       assert.ok(out.includes('重名卡：2 组'), `渲染要报重名：${out}`)
