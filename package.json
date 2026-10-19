@@ -16,6 +16,19 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.7-rc.1 <0.2.0-0 || >=0.2.0-0 <0.3.0-0",
+      "dshReleases": {
+        "0.1.7-rc.2": "compatible",
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.1": "compatible",
+        "0.2.1-rc.2": "compatible"
+      },
+      "node": ">=20.18",
+      "profiles": [
+        "desktop"
+      ]
     }
   },
   "keywords": [
@@ -39,12 +52,12 @@
   },
   "homepage": "https://github.com/MengXinSu/dsh-viya-memory#readme",
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.1 <0.2.0-0 || >=0.2.0-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.5"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/schemastery": "~3.18.5"
   },
   "scripts": {
     "test": "node --test tests/selftest.mjs"
